@@ -9,7 +9,16 @@ import {
   FeedbackReport,
 } from '../types';
 
-const API_BASE = '/api';
+function resolveApiBase(): string {
+  const envUrl = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '').trim();
+  if (!envUrl) {
+    return '/api';
+  }
+  const cleanUrl = envUrl.replace(/\/+$/, '');
+  return cleanUrl.endsWith('/api') ? cleanUrl : `${cleanUrl}/api`;
+}
+
+const API_BASE = resolveApiBase();
 
 export const api = axios.create({
   baseURL: API_BASE,
