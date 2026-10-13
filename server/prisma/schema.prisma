@@ -1,0 +1,385 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── USER & AUTH ────────────────────────────────────────────────────────
+
+enum UserRole {
+  CITIZEN
+  ADMIN
+}
+
+model User {
+  id             String   @id @default(uuid())
+  email          String   @unique
+  passwordHash   String
+  name           String
+  role           UserRole @default(CITIZEN)
+  preferredLang  String   @default("en")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  profile          UserProfile?
+  intakeSessions   IntakeSession[]
+  savedRecords     SavedRecord[]
+  savedActionPlans SavedActionPlan[]
+  feedbackReports  FeedbackReport[]
+  adminAuditLogs   AdminAuditLog[]
+
+  @@index([email])
+}
+
+model UserProfile {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  state           String?
+  district        String?
+  ageRange        String?
+  occupation      String?
+  category        String?  // student, farmer, employee, business_owner, senior_citizen, other
+  incomeRange     String?
+  areaType        String?  // rural, urban
+  gender          String?
+  familyDetails   String?
+  additionalInfo  Json?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([state])
+  @@index([category])
+}
+
+// ─── GOVERNMENT RECORDS ─────────────────────────────────────────────────
+
+enum RecordType {
+  SCHEME
+  SUBSIDY
+  SCHOLARSHIP
+  INSURANCE
+  SAVINGS_PRODUCT
+  GRANT
+  SERVICE
+  GRIEVANCE_CHANNEL
+  PENSION
+  OTHER
+}
+
+enum RecordCategory {
+  AGRICULTURE
+  EDUCATION
+  HEALTHCARE
+  WOMEN_AND_FAMILY
+  SMALL_BUSINESS
+  PENSION_SOCIAL_SECURITY
+  SAVINGS
+  GOVERNMENT_SERVICES
+  HOUSING
+  EMPLOYMENT
+  OTHER
+}
+
+enum PublicationStatus {
+  DRAFT
+  PENDING_REVIEW
+  VERIFIED
+  PUBLISHED
+  STALE
+  DISPUTED
+  ARCHIVED
+}
+
+model GovernmentRecord {
+  id                  String            @id @default(uuid())
+  title               String
+  slug                String            @unique
+  recordType          RecordType
+  category            RecordCategory
+  shortDescription    String
+  detailedDescription String
+  beneficiaries       String[]          // intended beneficiary groups
+  stateScope          String[]          // applicable states, empty = national
+  geographicScope     String?           // "national", "state", "district"
+  eligibilityDetails  String?           // human-readable eligibility text
+  benefits            String?           // what the beneficiary gets
+  productTerms        String?           // for savings products, insurance, etc.
+  requiredDocuments   String[]
+  applicationProcess  String?
+  officialUrl         String?
+  applicationUrl      String?
+  departmentId        String?
+  department          GovernmentDepartment? @relation(fields: [departmentId], references: [id])
+  
+  // Source & evidence
+  sourceUrl           String?
+  sourceExcerpt       String?           // supporting evidence quote
+  sourcePublicationDate DateTime?
+  lastCheckedAt       DateTime?
+  lastVerifiedAt      DateTime?
+  verifiedBy          String?
+  
+  // Status
+  status              PublicationStatus @default(DRAFT)
+  deadlineDate        DateTime?
+  effectiveDate       DateTime?
+  knownLimitations    String?
+  requiresHumanReview Boolean          @default(true)
+  
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  eligibilityRules    EligibilityRule[]
+  sources             RecordSource[]
+  savedBy             SavedRecord[]
+  recommendations     Recommendation[]
+  feedbackReports     FeedbackReport[]
+  editHistory         RecordEditHistory[]
+
+  @@index([category])
+  @@index([status])
+  @@index([recordType])
+  @@index([slug])
+}
+
+model RecordEditHistory {
+  id          String   @id @default(uuid())
+  recordId    String
+  record      GovernmentRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  fieldName   String
+  oldValue    String?
+  newValue    String?
+  editedBy    String
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  @@index([recordId])
+}
+
+// ─── ELIGIBILITY RULES ─────────────────────────────────────────────────
+
+model EligibilityRule {
+  id          String           @id @default(uuid())
+  recordId    String
+  record      GovernmentRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  
+  fieldName   String           // e.g. "age", "income", "state", "occupation", "gender", "area_type"
+  operator    String           // "eq", "neq", "gte", "lte", "in", "not_in", "between", "exists"
+  value       String           // serialized value or JSON array
+  description String?          // human-readable description
+  isRequired  Boolean          @default(false) // must match vs. nice to have
+  
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([recordId])
+  @@index([fieldName])
+}
+
+// ─── DEPARTMENTS & CONTACTS ────────────────────────────────────────────
+
+model GovernmentDepartment {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  shortName   String?
+  description String?
+  website     String?
+  level       String?  // "central", "state"
+  state       String?  // null for central
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  records     GovernmentRecord[]
+  contacts    OfficialContact[]
+
+  @@index([name])
+}
+
+model OfficialContact {
+  id           String               @id @default(uuid())
+  departmentId String
+  department   GovernmentDepartment @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  
+  contactType  String               // "helpline", "email", "office", "toll_free", "website"
+  value        String               // phone number, email, address, URL
+  description  String?
+  isVerified   Boolean              @default(false)
+  lastVerified DateTime?
+  
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  @@index([departmentId])
+}
+
+// ─── SOURCE REGISTRY ────────────────────────────────────────────────────
+
+model SourceRegistry {
+  id            String   @id @default(uuid())
+  name          String
+  baseUrl       String   @unique
+  description   String?
+  isActive      Boolean  @default(true)
+  lastCheckedAt DateTime?
+  checkStatus   String?  // "success", "failed", "timeout", "blocked"
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sources       RecordSource[]
+}
+
+model RecordSource {
+  id         String            @id @default(uuid())
+  recordId   String
+  record     GovernmentRecord  @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  registryId String?
+  registry   SourceRegistry?   @relation(fields: [registryId], references: [id])
+  
+  url        String
+  title      String?
+  excerpt    String?           // supporting evidence
+  fetchedAt  DateTime?
+  statusCode Int?
+  isValid    Boolean           @default(true)
+  
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  @@index([recordId])
+}
+
+// ─── INTAKE & AI SESSIONS ───────────────────────────────────────────────
+
+model IntakeSession {
+  id              String   @id @default(uuid())
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
+  initialProblem  String
+  structuredProfile Json?  // built up during conversation
+  status          String   @default("active") // "active", "completed", "abandoned"
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  messages        IntakeMessage[]
+  recommendations Recommendation[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model IntakeMessage {
+  id        String       @id @default(uuid())
+  sessionId String
+  session   IntakeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  role      String       // "user", "assistant", "system"
+  content   String
+  metadata  Json?        // structured data extracted, follow-up questions asked
+  
+  createdAt DateTime     @default(now())
+
+  @@index([sessionId])
+}
+
+model Recommendation {
+  id              String           @id @default(uuid())
+  sessionId       String
+  session         IntakeSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  recordId        String
+  record          GovernmentRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  
+  relevanceScore  Float
+  relevanceLabel  String           // "likely_relevant", "potentially_relevant", "more_info_required", "does_not_match"
+  matchReasons    String[]
+  missingInfo     String[]
+  explanation     String?
+  actionPlan      Json?
+  
+  createdAt       DateTime         @default(now())
+
+  @@index([sessionId])
+  @@index([recordId])
+}
+
+// ─── SAVED ITEMS ────────────────────────────────────────────────────────
+
+model SavedRecord {
+  id       String           @id @default(uuid())
+  userId   String
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recordId String
+  record   GovernmentRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  notes    String?
+  
+  createdAt DateTime        @default(now())
+
+  @@unique([userId, recordId])
+  @@index([userId])
+}
+
+model SavedActionPlan {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  title     String
+  recordId  String?
+  plan      Json     // { steps: [{ text, completed, order }] }
+  notes     String?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ─── FEEDBACK ───────────────────────────────────────────────────────────
+
+model FeedbackReport {
+  id       String            @id @default(uuid())
+  userId   String?
+  user     User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  recordId String?
+  record   GovernmentRecord? @relation(fields: [recordId], references: [id], onDelete: SetNull)
+  
+  type     String            // "outdated", "incorrect", "broken_link", "general", "suggestion"
+  message  String
+  status   String            @default("pending") // "pending", "reviewed", "resolved", "dismissed"
+  
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@index([status])
+  @@index([recordId])
+}
+
+// ─── ADMIN AUDIT LOG ────────────────────────────────────────────────────
+
+model AdminAuditLog {
+  id         String   @id @default(uuid())
+  adminId    String
+  admin      User     @relation(fields: [adminId], references: [id])
+  
+  action     String   // "create_record", "update_record", "publish", "verify", "archive", "reject", etc.
+  entityType String   // "GovernmentRecord", "SourceRegistry", etc.
+  entityId   String
+  details    Json?    // changed fields, reason, etc.
+  
+  createdAt  DateTime @default(now())
+
+  @@index([adminId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
