@@ -6,25 +6,32 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🌱 Seeding CARbon Setu database...');
 
-  // ── Create Admin User ───────────────────────────────────────────────
+  // ── Admin User Creation ─────────────────────────────────────────────
+  const skipUserSeed = process.env.SKIP_USER_SEED === 'true' || process.env.NODE_ENV === 'production';
   const adminEmail = process.env.ADMIN_EMAIL || 'admin@carbonsetu.in';
-  const adminPassword = process.env.ADMIN_PASSWORD || 'CarbonSetu@Admin2024';
+  const adminPassword = process.env.ADMIN_PASSWORD;
 
-  const existingAdmin = await prisma.user.findUnique({ where: { email: adminEmail } });
-  if (!existingAdmin) {
-    const passwordHash = await bcrypt.hash(adminPassword, 12);
-    await prisma.user.create({
-      data: {
-        email: adminEmail,
-        passwordHash,
-        name: 'CARbon Setu Admin',
-        role: 'ADMIN',
-        profile: { create: {} },
-      },
-    });
-    console.log(`✅ Admin user created: ${adminEmail}`);
+  if (skipUserSeed) {
+    console.log('🛡️  SKIP_USER_SEED is active: Skipping default admin & demo user creation for cloud database.');
+  } else if (!adminPassword) {
+    console.log('ℹ️  No ADMIN_PASSWORD supplied; skipping admin creation to avoid insecure defaults.');
   } else {
-    console.log(`ℹ️  Admin user already exists: ${adminEmail}`);
+    const existingAdmin = await prisma.user.findUnique({ where: { email: adminEmail } });
+    if (!existingAdmin) {
+      const passwordHash = await bcrypt.hash(adminPassword, 12);
+      await prisma.user.create({
+        data: {
+          email: adminEmail,
+          passwordHash,
+          name: 'CARbon Setu Admin',
+          role: 'ADMIN',
+          profile: { create: {} },
+        },
+      });
+      console.log(`✅ Admin user created: ${adminEmail}`);
+    } else {
+      console.log(`ℹ️  Admin user already exists: ${adminEmail}`);
+    }
   }
 
   // ── Create Departments ──────────────────────────────────────────────
@@ -509,7 +516,11 @@ async function main() {
 
   console.log('\n🎉 Seeding complete!');
   console.log(`📊 Summary:`);
-  console.log(`   - Admin user: ${adminEmail}`);
+  if (!skipUserSeed && adminPassword) {
+    console.log(`   - Admin user: ${adminEmail}`);
+  } else {
+    console.log(`   - Admin/User seeding: Skipped (Cloud/Production safe mode)`);
+  }
   console.log(`   - Departments: ${departments.length}`);
   console.log(`   - Government records: ${records.length}`);
   console.log(`   - Source registries: ${sourceRegistries.length}`);
