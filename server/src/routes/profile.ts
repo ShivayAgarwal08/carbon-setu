@@ -19,6 +19,15 @@ const updateProfileSchema = z.object({
   areaType: z.enum(['rural', 'urban']).optional(),
   gender: z.string().optional(),
   familyDetails: z.string().optional(),
+  // Extended citizen attributes from frontend
+  age: z.union([z.number(), z.string()]).optional(),
+  incomeAnnual: z.union([z.number(), z.string()]).optional(),
+  casteCategory: z.string().optional(),
+  isFarmer: z.boolean().optional(),
+  isStudent: z.boolean().optional(),
+  isBpl: z.boolean().optional(),
+  hasDisability: z.boolean().optional(),
+  minorityStatus: z.boolean().optional(),
 });
 
 // GET /api/profile
@@ -32,7 +41,23 @@ profileRouter.get('/', authenticate, async (req: AuthRequest, res: Response) => 
       },
     });
     if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-    return res.json({ success: true, data: user });
+
+    // Flatten additionalInfo into profile for client convenience
+    const mergedProfile = user.profile
+      ? {
+          ...user.profile,
+          ...((user.profile.additionalInfo as Record<string, any>) || {}),
+        }
+      : null;
+
+    return res.json({
+      success: true,
+      data: {
+        ...user,
+        profile: mergedProfile,
+        ...(mergedProfile || {}),
+      },
+    });
   } catch (error) {
     logger.error('Get profile error', error);
     return res.status(500).json({ success: false, error: 'Failed to get profile' });
@@ -43,7 +68,19 @@ profileRouter.get('/', authenticate, async (req: AuthRequest, res: Response) => 
 profileRouter.put('/', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const data = updateProfileSchema.parse(req.body);
-    const { name, preferredLang, ...profileData } = data;
+    const {
+      name,
+      preferredLang,
+      age,
+      incomeAnnual,
+      casteCategory,
+      isFarmer,
+      isStudent,
+      isBpl,
+      hasDisability,
+      minorityStatus,
+      ...standardProfileData
+    } = data;
 
     const updates: any[] = [];
 
@@ -56,15 +93,46 @@ profileRouter.put('/', authenticate, async (req: AuthRequest, res: Response) => 
       );
     }
 
-    if (Object.keys(profileData).length > 0) {
-      updates.push(
-        prisma.userProfile.upsert({
-          where: { userId: req.userId! },
-          update: profileData,
-          create: { userId: req.userId!, ...profileData },
-        })
-      );
+    // Pack extended attributes into additionalInfo JSON column
+    const extendedAttributes: Record<string, any> = {};
+    if (age !== undefined) extendedAttributes.age = typeof age === 'string' ? parseInt(age, 10) || null : age;
+    if (incomeAnnual !== undefined) extendedAttributes.incomeAnnual = typeof incomeAnnual === 'string' ? parseInt(incomeAnnual, 10) || null : incomeAnnual;
+    if (casteCategory !== undefined) extendedAttributes.casteCategory = casteCategory;
+    if (isFarmer !== undefined) extendedAttributes.isFarmer = isFarmer;
+    if (isStudent !== undefined) extendedAttributes.isStudent = isStudent;
+    if (isBpl !== undefined) extendedAttributes.isBpl = isBpl;
+    if (hasDisability !== undefined) extendedAttributes.hasDisability = hasDisability;
+    if (minorityStatus !== undefined) extendedAttributes.minorityStatus = minorityStatus;
+
+    // Fetch existing profile to merge additionalInfo
+    const existingProfile = await prisma.userProfile.findUnique({
+      where: { userId: req.userId! },
+    });
+
+    const mergedAdditionalInfo = {
+      ...((existingProfile?.additionalInfo as Record<string, any>) || {}),
+      ...extendedAttributes,
+    };
+
+    const finalProfileData: any = {
+      ...standardProfileData,
+      additionalInfo: mergedAdditionalInfo,
+    };
+
+    if (casteCategory && !finalProfileData.category) {
+      finalProfileData.category = casteCategory;
     }
+    if (incomeAnnual && !finalProfileData.incomeRange) {
+      finalProfileData.incomeRange = `${incomeAnnual}`;
+    }
+
+    updates.push(
+      prisma.userProfile.upsert({
+        where: { userId: req.userId! },
+        update: finalProfileData,
+        create: { userId: req.userId!, ...finalProfileData },
+      })
+    );
 
     await prisma.$transaction(updates);
 
@@ -73,7 +141,21 @@ profileRouter.put('/', authenticate, async (req: AuthRequest, res: Response) => 
       select: { id: true, email: true, name: true, preferredLang: true, profile: true },
     });
 
-    return res.json({ success: true, data: user });
+    const flattenedProfile = user?.profile
+      ? {
+          ...user.profile,
+          ...((user.profile.additionalInfo as Record<string, any>) || {}),
+        }
+      : null;
+
+    return res.json({
+      success: true,
+      data: {
+        ...user,
+        profile: flattenedProfile,
+        ...(flattenedProfile || {}),
+      },
+    });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ success: false, error: 'Validation failed', details: error.errors });

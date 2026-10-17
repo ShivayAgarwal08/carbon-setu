@@ -17,6 +17,7 @@ import { feedbackRouter } from './routes/feedback';
 import { adminRouter } from './routes/admin';
 import { departmentsRouter } from './routes/departments';
 import { healthRouter } from './routes/health';
+import { rtiRouter } from './routes/rti';
 import { logger } from './utils/logger';
 
 const app = express();
@@ -27,10 +28,29 @@ app.use(helmet());
 app.use(cookieParser(process.env.SESSION_SECRET));
 
 // CORS
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:4173',
+  'http://localhost:3000',
+  'https://carbon-setu-live.vercel.app',
+  ...(process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',').map((s) => s.trim()) : []),
+];
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    try {
+      const hostname = new URL(origin).hostname;
+      if (allowedOrigins.includes(origin) || hostname.endsWith('.vercel.app')) {
+        return callback(null, true);
+      }
+    } catch {
+      // invalid URL
+    }
+    return callback(null, false);
+  },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
@@ -80,21 +100,25 @@ app.use('/api/saved', savedRouter);
 app.use('/api/feedback', feedbackRouter);
 app.use('/api/departments', departmentsRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/rti', rtiRouter);
 
 // Error handler
 app.use(errorHandler);
 
-// Start server
-app.listen(PORT, () => {
-  logger.info(`CARbon Setu API running on port ${PORT}`);
-  logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  
-  if (!process.env.GEMINI_API_KEY) {
-    logger.warn('GEMINI_API_KEY not set — AI features will use fallback mode');
-  }
-  if (!process.env.DATABASE_URL) {
-    logger.error('DATABASE_URL not set — database features will fail');
-  }
-});
+// Start server (only when not in test mode)
+const isTestEnv = process.env.NODE_ENV === 'test' || process.argv.some(arg => arg.includes('test'));
+if (!isTestEnv) {
+  app.listen(PORT, () => {
+    logger.info(`CARbon Setu API running on port ${PORT}`);
+    logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    
+    if (!process.env.GEMINI_API_KEY) {
+      logger.warn('GEMINI_API_KEY not set — AI features will use fallback mode');
+    }
+    if (!process.env.DATABASE_URL) {
+      logger.error('DATABASE_URL not set — database features will fail');
+    }
+  });
+}
 
 export default app;

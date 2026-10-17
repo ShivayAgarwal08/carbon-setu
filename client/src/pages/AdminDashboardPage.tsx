@@ -27,12 +27,18 @@ export const AdminDashboardPage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState<'schemes' | 'feedback' | 'audit'>('schemes');
+  const [activeTab, setActiveTab] = useState<'schemes' | 'import' | 'feedback' | 'audit'>('schemes');
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [records, setRecords] = useState<any[]>([]);
   const [feedback, setFeedback] = useState<FeedbackReport[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Import dataset state
+  const [importJsonText, setImportJsonText] = useState('');
+  const [importAutoPublish, setImportAutoPublish] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<any | null>(null);
 
   // New scheme modal state
   const [isNewSchemeModalOpen, setIsNewSchemeModalOpen] = useState(false);
@@ -91,6 +97,53 @@ export const AdminDashboardPage: React.FC = () => {
       if (stats) setStats({ ...stats, totalRecords: stats.totalRecords - 1 });
     } catch (err) {
       alert('Failed to delete scheme.');
+    }
+  };
+
+  const handleVerifyRecord = async (id: string) => {
+    try {
+      await adminApi.verifyRecord(id);
+      setRecords(prev =>
+        prev.map(r => (r.id === id ? { ...r, status: 'PUBLISHED', requiresHumanReview: false } : r))
+      );
+      if (stats) {
+        setStats({
+          ...stats,
+          publishedRecords: stats.publishedRecords + 1,
+          draftRecords: Math.max(0, stats.draftRecords - 1),
+        });
+      }
+      alert('Scheme successfully verified and published!');
+    } catch (err) {
+      alert('Failed to verify record');
+    }
+  };
+
+  const handleBatchImport = async () => {
+    if (!importJsonText.trim()) {
+      alert('Please paste valid JSON scheme array to import.');
+      return;
+    }
+
+    setImporting(true);
+    setImportResult(null);
+
+    try {
+      let parsed = JSON.parse(importJsonText);
+      if (!Array.isArray(parsed)) {
+        parsed = [parsed];
+      }
+
+      const res = await adminApi.importRecords(parsed, importAutoPublish);
+      if (res.success && res.data) {
+        setImportResult(res.data);
+        loadDashboardData();
+        alert(`Import completed! Imported: ${res.data.importedCount}, Skipped: ${res.data.skippedCount}`);
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.error || err.message || 'JSON parsing or import failed. Verify format.');
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -256,6 +309,17 @@ export const AdminDashboardPage: React.FC = () => {
         </button>
 
         <button
+          onClick={() => setActiveTab('import')}
+          className={`pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
+            activeTab === 'import'
+              ? 'border-orange-600 text-orange-600'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          Batch Dataset Import
+        </button>
+
+        <button
           onClick={() => setActiveTab('feedback')}
           className={`pb-3 px-1 text-sm font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
             activeTab === 'feedback'
@@ -329,6 +393,15 @@ export const AdminDashboardPage: React.FC = () => {
                       </span>
                     </td>
                     <td className="px-4 py-3.5 text-right space-x-2">
+                      {rec.status !== 'PUBLISHED' && (
+                        <button
+                          onClick={() => handleVerifyRecord(rec.id)}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-[11px] font-bold"
+                          title="Verify source & publish live"
+                        >
+                          Verify & Publish
+                        </button>
+                      )}
                       <Link
                         to={`/schemes/${rec.slug}`}
                         className="p-1 text-slate-500 hover:text-slate-800"
@@ -352,7 +425,107 @@ export const AdminDashboardPage: React.FC = () => {
         </div>
       )}
 
-      {/* Tab 2: Feedback & Citizen Reports */}
+      {/* Tab 2: Batch Scheme Dataset Import */}
+      {activeTab === 'import' && (
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-xs space-y-6">
+          <div className="space-y-1">
+            <h2 className="text-lg font-bold text-slate-900 font-['Outfit']">Batch Scheme Dataset Ingestion</h2>
+            <p className="text-xs text-slate-500">
+              Import validated central or state welfare schemes from official notifications, ministry data dumps, or verified CSV/JSON feeds. Duplicates are automatically detected and preserved.
+            </p>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700 space-y-2">
+            <p className="font-bold text-slate-900">Required Scheme Schema Structure:</p>
+            <pre className="p-3 bg-white border border-slate-200 rounded-lg text-[11px] font-mono text-slate-800 overflow-x-auto">
+{`[
+  {
+    "title": "Pradhan Mantri Awas Yojana - Gramin (PMAY-G)",
+    "slug": "pm-awas-yojana-gramin",
+    "category": "HOUSING",
+    "recordType": "SUBSIDY",
+    "shortDescription": "Financial assistance for construction of pucca houses for rural poor.",
+    "detailedDescription": "PMAY-G provides financial grants of ₹1.20 lakh in plains and ₹1.30 lakh in hilly states.",
+    "beneficiaries": ["Rural households", "BPL families", "Homeless"],
+    "stateScope": [],
+    "geographicScope": "national",
+    "eligibilityDetails": "Families without a pucca house as per SECC 2011 deprivation criteria.",
+    "benefits": "₹1.20 Lakh DBT grant + 90 days MGNREGA wages + ₹12,000 for toilet construction.",
+    "requiredDocuments": ["Aadhaar card", "Bank Passbook", "Job Card number", "Land certificate"],
+    "officialUrl": "https://pmayg.nic.in",
+    "sourceUrl": "https://pmayg.nic.in/netiay/home.aspx"
+  }
+]`}
+            </pre>
+          </div>
+
+          <div className="space-y-2">
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+              Paste Scheme JSON Array *
+            </label>
+            <textarea
+              rows={12}
+              value={importJsonText}
+              onChange={(e) => setImportJsonText(e.target.value)}
+              placeholder="Paste JSON array containing scheme objects..."
+              className="w-full text-xs font-mono rounded-xl border border-slate-300 p-3 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-orange-500 focus:outline-hidden"
+            />
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-2">
+            <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-800">
+              <input
+                type="checkbox"
+                checked={importAutoPublish}
+                onChange={(e) => setImportAutoPublish(e.target.checked)}
+                className="w-4 h-4 text-orange-600 rounded"
+              />
+              <span>Auto-Publish as Verified (Sets status to PUBLISHED and timestamps verifiedAt)</span>
+            </label>
+
+            <button
+              onClick={handleBatchImport}
+              disabled={importing}
+              className="px-6 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            >
+              {importing ? (
+                <span>Validating & Ingesting...</span>
+              ) : (
+                <>
+                  <Plus className="w-4 h-4" />
+                  <span>Execute Ingestion & Verification</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Import Result Feedback */}
+          {importResult && (
+            <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-xs space-y-2">
+              <div className="flex items-center gap-2 text-emerald-900 font-bold">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span>
+                  Ingestion Complete: {importResult.importedCount} Imported, {importResult.skippedCount} Skipped
+                </span>
+              </div>
+              {importResult.skipped?.length > 0 && (
+                <div className="text-[11px] text-slate-600 pt-1">
+                  <p className="font-semibold text-slate-800">Skipped Schemes (Duplicates):</p>
+                  <ul className="list-disc list-inside">
+                    {importResult.skipped.map((s: any, idx: number) => (
+                      <li key={idx}>
+                        {s.title} ({s.slug}) — {s.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab 3: Feedback & Citizen Reports */}
       {activeTab === 'feedback' && (
         <div className="space-y-4">
           {feedback.length > 0 ? (

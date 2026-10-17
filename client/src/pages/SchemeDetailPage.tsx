@@ -21,6 +21,9 @@ import {
   Plus,
   Check,
   Flag,
+  Volume2,
+  VolumeX,
+  ListTodo,
 } from 'lucide-react';
 import { recordsApi, savedApi } from '../api/client';
 import { GovernmentRecord } from '../types';
@@ -28,11 +31,15 @@ import { CategoryBadge } from '../components/EligibilityBadge';
 import { FeedbackModal } from '../components/FeedbackModal';
 import { useAuth } from '../context/AuthContext';
 import { useCompare } from '../context/CompareContext';
+import { useLanguage } from '../context/LanguageContext';
+import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
 
 export const SchemeDetailPage: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
   const { user } = useAuth();
   const { addRecord, removeRecord, isInCompare } = useCompare();
+  const { language, t } = useLanguage();
+  const { isSupported: isTtsSupported, speaking, speak, stop: stopSpeaking } = useSpeechSynthesis();
 
   const [record, setRecord] = useState<GovernmentRecord | null>(null);
   const [loading, setLoading] = useState(true);
@@ -84,6 +91,64 @@ export const SchemeDetailPage: React.FC = () => {
       console.error(err);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const [creatingPlan, setCreatingPlan] = useState(false);
+  const [planCreated, setPlanCreated] = useState(false);
+
+  const handleCreatePlan = async () => {
+    if (!user) {
+      alert('Please log in or register to create and track scheme action plans.');
+      return;
+    }
+    if (!record) return;
+
+    setCreatingPlan(true);
+    try {
+      const docs = record.requiredDocuments?.length ? record.requiredDocuments : ['Aadhaar Card', 'Income Certificate', 'Bank Passbook'];
+      const defaultSteps = [
+        ...docs.map((doc: string, idx: number) => ({
+          order: idx + 1,
+          text: `Obtain / Verify: ${doc}`,
+          completed: !!checkedDocs[doc],
+        })),
+        {
+          order: docs.length + 1,
+          text: 'Submit completed application on official government portal or CSC kiosk',
+          completed: false,
+        },
+        {
+          order: docs.length + 2,
+          text: 'Record and store official acknowledgement / tracking reference number',
+          completed: false,
+        },
+        {
+          order: docs.length + 3,
+          text: 'Track verification status (Use RTI Assistant if pending over 30 days)',
+          completed: false,
+        },
+      ];
+
+      await savedApi.createPlan({
+        title: record.title,
+        recordId: record.id,
+        plan: {
+          status: 'preparing_documents',
+          recordSlug: record.slug,
+          officialUrl: record.officialUrl,
+          steps: defaultSteps,
+        },
+        notes: `Action plan initiated on ${new Date().toLocaleDateString()}`,
+      });
+
+      setPlanCreated(true);
+      setTimeout(() => setPlanCreated(false), 5000);
+    } catch (err) {
+      console.error('Failed to create action plan', err);
+      alert('Failed to create action plan. Please try again.');
+    } finally {
+      setCreatingPlan(false);
     }
   };
 
@@ -164,9 +229,30 @@ export const SchemeDetailPage: React.FC = () => {
         </Link>
 
         <div className="flex items-center gap-2">
+          {isTtsSupported && (
+            <button
+              onClick={() => {
+                if (speaking) {
+                  stopSpeaking();
+                } else if (record) {
+                  const speakContent = `${record.title}. ${record.shortDescription}. ${record.detailedDescription}`;
+                  speak(speakContent, language);
+                }
+              }}
+              className={`p-2 rounded-lg border text-xs flex items-center gap-1.5 transition-colors cursor-pointer ${
+                speaking
+                  ? 'bg-orange-600 text-white border-orange-700 animate-pulse'
+                  : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+              }`}
+              title={speaking ? t('common.stop') : t('common.speak')}
+            >
+              {speaking ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+              <span className="hidden sm:inline">{speaking ? t('common.stop') : t('common.speak')}</span>
+            </button>
+          )}
           <button
             onClick={handleShare}
-            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs flex items-center gap-1.5"
+            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs flex items-center gap-1.5 cursor-pointer"
             title="Share scheme details"
           >
             <Share2 className="w-3.5 h-3.5" />
@@ -174,7 +260,7 @@ export const SchemeDetailPage: React.FC = () => {
           </button>
           <button
             onClick={handlePrint}
-            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs flex items-center gap-1.5"
+            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs flex items-center gap-1.5 cursor-pointer"
             title="Print scheme guidelines"
           >
             <Printer className="w-3.5 h-3.5" />
@@ -182,7 +268,7 @@ export const SchemeDetailPage: React.FC = () => {
           </button>
           <button
             onClick={() => setIsFeedbackOpen(true)}
-            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-amber-700 text-xs flex items-center gap-1.5"
+            className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-amber-700 text-xs flex items-center gap-1.5 cursor-pointer"
             title="Report data discrepancy"
           >
             <Flag className="w-3.5 h-3.5" />
@@ -246,6 +332,15 @@ export const SchemeDetailPage: React.FC = () => {
             <span>{compared ? 'In Comparison' : 'Add to Compare'}</span>
           </button>
 
+          <button
+            onClick={handleCreatePlan}
+            disabled={creatingPlan}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 transition-all cursor-pointer"
+          >
+            <ListTodo className="w-4 h-4 text-amber-700" />
+            <span>{creatingPlan ? 'Creating Plan...' : 'Track Action Plan'}</span>
+          </button>
+
           {record.officialUrl && (
             <a
               href={record.officialUrl}
@@ -258,6 +353,20 @@ export const SchemeDetailPage: React.FC = () => {
             </a>
           )}
         </div>
+
+        {planCreated && (
+          <div className="mt-4 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>
+                <strong>Action Plan Created!</strong> Steps, document checklist, and application milestones saved.
+              </span>
+            </div>
+            <Link to="/profile" className="font-bold underline text-emerald-900 hover:text-emerald-700">
+              View in My Profile &rarr;
+            </Link>
+          </div>
+        )}
       </div>
 
       {/* Main Grid: Details & Document Readiness */}

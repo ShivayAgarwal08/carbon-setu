@@ -70,12 +70,16 @@ const actionPlanSchema = z.object({
   title: z.string().min(1).max(200),
   recordId: z.string().optional(),
   plan: z.object({
+    status: z.string().optional(),
+    applicationRef: z.string().optional(),
+    recordSlug: z.string().optional(),
+    officialUrl: z.string().optional(),
     steps: z.array(z.object({
       text: z.string(),
       completed: z.boolean().default(false),
       order: z.number(),
     })),
-  }),
+  }).passthrough(),
   notes: z.string().optional(),
 });
 

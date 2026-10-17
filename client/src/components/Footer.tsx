@@ -82,6 +82,11 @@ export const Footer: React.FC = () => {
                   Scheme Comparison Matrix
                 </Link>
               </li>
+              <li>
+                <Link to="/rti" className="text-amber-400 hover:text-amber-300 font-medium transition-colors">
+                  RTI & Appeal Assistant (Sec 6(1) & 19(1))
+                </Link>
+              </li>
             </ul>
           </div>
 
@@ -91,6 +96,11 @@ export const Footer: React.FC = () => {
               Official Portals
             </h4>
             <ul className="space-y-2 text-sm text-slate-400">
+              <li>
+                <Link to="/directory" className="text-emerald-400 hover:text-emerald-300 font-medium transition-colors">
+                  Authority & Helpline Directory
+                </Link>
+              </li>
               <li>
                 <a
                   href="https://www.myscheme.gov.in"

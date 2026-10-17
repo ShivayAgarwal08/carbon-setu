@@ -23,6 +23,7 @@ export interface UserProfile {
   isBpl?: boolean;
   hasDisability?: boolean;
   minorityStatus?: boolean;
+  preferredLang?: 'en' | 'hi';
 }
 
 export interface Department {

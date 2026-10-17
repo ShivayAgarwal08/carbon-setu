@@ -36,7 +36,8 @@ interface ClassificationResult {
  */
 export async function classifyAndExtract(
   problem: string,
-  existingProfile: Partial<UserProfileData> = {}
+  existingProfile: Partial<UserProfileData> = {},
+  lang: 'en' | 'hi' = 'en'
 ): Promise<ClassificationResult> {
   const client = getClient();
 
@@ -45,7 +46,7 @@ export async function classifyAndExtract(
     beneficiaryType: inferBeneficiaryFromText(problem),
     urgency: 'medium',
     missingFields: getMissingFields(existingProfile),
-    followUpQuestions: generateFallbackQuestions(existingProfile),
+    followUpQuestions: generateFallbackQuestions(existingProfile, lang),
     extractedProfile: extractProfileFromText(problem),
   };
 
@@ -55,9 +56,14 @@ export async function classifyAndExtract(
   }
 
   try {
+    const langInstruction = lang === 'hi'
+      ? 'Language instruction: Formulate follow-up questions in natural, respectful Hindi (Devanagari script).'
+      : 'Language instruction: Formulate follow-up questions in simple Indian English.';
+
     const prompt = `You are an AI assistant for CARbon Setu, an Indian government benefits discovery platform. You are NOT a government website and cannot approve applications.
 
 Analyze the following user problem and extract relevant information.
+${langInstruction}
 
 User's problem: "${problem}"
 
@@ -132,12 +138,13 @@ export async function explainRecommendations(
     matchReasons: string[];
     missingInfo: string[];
     relevanceLabel: string;
-  }>
+  }>,
+  lang: 'en' | 'hi' = 'en'
 ): Promise<string> {
   const client = getClient();
 
   if (!client || records.length === 0) {
-    return generateFallbackExplanation(records);
+    return generateFallbackExplanation(records, lang);
   }
 
   try {
@@ -155,7 +162,16 @@ Record ${i + 1}: ${r.title}
 - Relevance: ${r.relevanceLabel}
 `).join('\n');
 
+    const langInstruction = lang === 'hi'
+      ? `LANGUAGE REQUIREMENT:
+- Write the entire response in clear, respectful, natural Hindi (Devanagari script) so a rural citizen can easily understand.
+- Retain official scheme names (e.g., Ayushman Bharat, PM-KISAN, PMFBY) clearly.
+- Preserve all financial figures, benefits (e.g. ₹5 लाख, ₹6,000 प्रति वर्ष), official URLs, and deadlines exactly without translation errors.`
+      : `LANGUAGE REQUIREMENT: Write in clear, plain Indian English.`;
+
     const prompt = `You are an assistant for CARbon Setu, an INDEPENDENT Indian government benefits discovery platform. You are NOT a government website and CANNOT approve applications or guarantee eligibility.
+
+${langInstruction}
 
 User's problem: "${problem}"
 User's profile: ${JSON.stringify(profile)}
@@ -189,10 +205,10 @@ CRITICAL RULES:
       },
     });
 
-    return response.text || generateFallbackExplanation(records);
+    return response.text || generateFallbackExplanation(records, lang);
   } catch (error) {
     logger.error('Gemini explanation error', error);
-    return generateFallbackExplanation(records);
+    return generateFallbackExplanation(records, lang);
   }
 }
 
@@ -202,7 +218,8 @@ CRITICAL RULES:
 export async function processFollowUp(
   conversationHistory: Array<{ role: string; content: string }>,
   latestMessage: string,
-  currentProfile: Partial<UserProfileData>
+  currentProfile: Partial<UserProfileData>,
+  lang: 'en' | 'hi' = 'en'
 ): Promise<{
   response: string;
   extractedData: Partial<UserProfileData>;
@@ -211,7 +228,9 @@ export async function processFollowUp(
   const client = getClient();
 
   const fallback = {
-    response: 'Thank you for that information. Let me search for relevant government schemes and services based on what you have shared.',
+    response: lang === 'hi'
+      ? 'इस जानकारी के लिए धन्यवाद। आपके द्वारा साझा किए गए विवरणों के आधार पर मैं आपके लिए उपयुक्त सरकारी योजनाएं खोज रहा हूँ।'
+      : 'Thank you for that information. Let me search for relevant government schemes and services based on what you have shared.',
     extractedData: extractProfileFromText(latestMessage),
     isComplete: true,
   };
@@ -226,7 +245,12 @@ export async function processFollowUp(
       .map(m => `${m.role}: ${m.content}`)
       .join('\n');
 
+    const langInstruction = lang === 'hi'
+      ? 'Formulate your conversational response and any follow-up question in respectful, natural Hindi (Devanagari script).'
+      : 'Formulate your response in simple Indian English.';
+
     const prompt = `You are an AI assistant for CARbon Setu, helping Indian citizens discover government schemes.
+${langInstruction}
 
 Conversation so far:
 ${historyStr}
@@ -359,21 +383,50 @@ function getMissingFields(profile: Partial<UserProfileData>): string[] {
   return missing;
 }
 
-function generateFallbackQuestions(profile: Partial<UserProfileData>): string[] {
+function generateFallbackQuestions(profile: Partial<UserProfileData>, lang: 'en' | 'hi' = 'en'): string[] {
   const questions: string[] = [];
 
-  if (!profile.state) questions.push('Which state do you live in?');
-  if (!profile.category && !profile.occupation) questions.push('What is your occupation or primary role? (e.g., farmer, student, business owner)');
-  if (!profile.ageRange) questions.push('What is your approximate age group?');
+  if (lang === 'hi') {
+    if (!profile.state) questions.push('आप किस राज्य में रहते हैं?');
+    if (!profile.category && !profile.occupation) questions.push('आपका मुख्य व्यवसाय या कार्य क्या है? (जैसे किसान, छात्र, छोटा व्यापारी)');
+    if (!profile.ageRange) questions.push('आपकी अनुमानित आयु क्या है?');
+  } else {
+    if (!profile.state) questions.push('Which state do you live in?');
+    if (!profile.category && !profile.occupation) questions.push('What is your occupation or primary role? (e.g., farmer, student, business owner)');
+    if (!profile.ageRange) questions.push('What is your approximate age group?');
+  }
 
   return questions.slice(0, 3);
 }
 
 function generateFallbackExplanation(
-  records: Array<{ title: string; shortDescription: string; officialUrl: string | null; matchReasons: string[] }>
+  records: Array<{ title: string; shortDescription: string; officialUrl: string | null; matchReasons: string[] }>,
+  lang: 'en' | 'hi' = 'en'
 ): string {
   if (records.length === 0) {
-    return 'We could not find matching government schemes in our current database. Please try browsing all available records or refining your search. Our database covers a limited selection of schemes and is regularly being expanded.';
+    return lang === 'hi'
+      ? 'हमारे वर्तमान डेटाबेस में आपकी स्थिति से मेल खाती सरकारी योजना नहीं मिली। कृपया सभी उपलब्ध योजनाएं देखें। हमारा डेटाबेस निरंतर बढ़ाया जा रहा है।'
+      : 'We could not find matching government schemes in our current database. Please try browsing all available records or refining your search. Our database covers a limited selection of schemes and is regularly being expanded.';
+  }
+
+  if (lang === 'hi') {
+    let text = '## आपके लिए अनुशंसित सरकारी योजनाएं\n\n';
+    text += '*सूचना: यह केवल कार्बन सेतु द्वारा दी गई प्रारंभिक मार्गदर्शन जानकारी है, कोई आधिकारिक सरकारी निर्णय नहीं।*\n\n';
+
+    for (const record of records) {
+      text += `### ${record.title}\n`;
+      text += `${record.shortDescription}\n\n`;
+      if (record.matchReasons.length > 0) {
+        text += `**यह योजना आपके लिए क्यों उपयुक्त हो सकती है:** ${record.matchReasons.join(', ')}\n\n`;
+      }
+      if (record.officialUrl) {
+        text += `**आधिकारिक पोर्टल:** ${record.officialUrl}\n\n`;
+      }
+      text += '---\n\n';
+    }
+
+    text += '*कृपया ऊपर दिए गए आधिकारिक सरकारी स्रोतों पर सभी विवरण और पात्रता की पुष्टि अवश्य करें। कार्बन सेतु एक स्वतंत्र नागरिक मंच है और पात्रता या स्वीकृति की गारंटी नहीं देता।*';
+    return text;
   }
 
   let text = '## Relevant Government Schemes Found\n\n';

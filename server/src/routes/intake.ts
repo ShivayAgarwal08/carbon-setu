@@ -10,6 +10,7 @@ export const intakeRouter = Router();
 
 const startSessionSchema = z.object({
   problem: z.string().min(5, 'Please describe your problem in at least a few words').max(2000),
+  lang: z.enum(['en', 'hi']).optional().default('en'),
   profile: z.object({
     state: z.string().optional(),
     district: z.string().optional(),
@@ -24,15 +25,17 @@ const startSessionSchema = z.object({
 
 const followUpSchema = z.object({
   message: z.string().min(1).max(2000),
+  lang: z.enum(['en', 'hi']).optional().default('en'),
 });
 
 // POST /api/intake/start — Start an intake session
 intakeRouter.post('/start', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
     const data = startSessionSchema.parse(req.body);
+    const lang = data.lang || 'en';
 
     // Classify the problem and extract profile data
-    const classification = await classifyAndExtract(data.problem, data.profile || {});
+    const classification = await classifyAndExtract(data.problem, data.profile || {}, lang);
 
     // Merge extracted profile with provided profile
     const mergedProfile: UserProfileData = {
@@ -40,25 +43,32 @@ intakeRouter.post('/start', optionalAuth, async (req: AuthRequest, res: Response
       ...classification.extractedProfile,
     };
 
+    // Greeting according to language
+    const defaultAssistantGreeting = lang === 'hi'
+      ? classification.followUpQuestions.length > 0
+        ? `मैं समझ गया हूँ कि आप "${data.problem}" के लिए सहायता चाहते हैं। आपके लिए सबसे उपयुक्त सरकारी योजनाएं खोजने हेतु कृपया इन प्रश्नों के उत्तर दें:\n\n${classification.followUpQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`
+        : `मैं समझ गया हूँ कि आप "${data.problem}" के लिए सहायता चाहते हैं। मैं आपके लिए सरकारी योजनाओं और कल्याणकारी सेवाओं की खोज कर रहा हूँ।`
+      : classification.followUpQuestions.length > 0
+        ? `I understand you're looking for help with: ${data.problem}. To find the most relevant government schemes for you, I have a few questions:\n\n${classification.followUpQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`
+        : `I understand you're looking for help with: ${data.problem}. Let me search for relevant government schemes and services.`;
+
     // Create the session
     const session = await prisma.intakeSession.create({
       data: {
         userId: req.userId || null,
         initialProblem: data.problem,
-        structuredProfile: mergedProfile as any,
+        structuredProfile: { ...mergedProfile, lang } as any,
         status: 'active',
         messages: {
           create: [
             {
               role: 'user',
               content: data.problem,
-              metadata: { profile: data.profile },
+              metadata: { profile: data.profile, lang },
             },
             {
               role: 'assistant',
-              content: classification.followUpQuestions.length > 0
-                ? `I understand you're looking for help with: ${data.problem}. To find the most relevant government schemes for you, I have a few questions:\n\n${classification.followUpQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`
-                : `I understand you're looking for help with: ${data.problem}. Let me search for relevant government schemes and services.`,
+              content: defaultAssistantGreeting,
               metadata: {
                 classification: {
                   categories: classification.categories,
@@ -66,6 +76,7 @@ intakeRouter.post('/start', optionalAuth, async (req: AuthRequest, res: Response
                   urgency: classification.urgency,
                 },
                 missingFields: classification.missingFields,
+                lang,
               },
             },
           ],
@@ -79,7 +90,7 @@ intakeRouter.post('/start', optionalAuth, async (req: AuthRequest, res: Response
     // If we have enough info, also get initial recommendations
     let recommendations = null;
     if (classification.missingFields.filter(f => ['state', 'category', 'occupation'].includes(f)).length === 0) {
-      recommendations = await getRecommendations(session.id, data.problem, mergedProfile, classification.categories);
+      recommendations = await getRecommendations(session.id, data.problem, mergedProfile, classification.categories, lang);
     }
 
     return res.status(201).json({
@@ -91,7 +102,8 @@ intakeRouter.post('/start', optionalAuth, async (req: AuthRequest, res: Response
           beneficiaryType: classification.beneficiaryType,
           missingFields: classification.missingFields,
         },
-        recommendations,
+        recommendations: recommendations?.recommendations || null,
+        aiExplanation: recommendations?.aiExplanation || null,
         geminiAvailable: isGeminiAvailable(),
       },
     });
@@ -119,15 +131,13 @@ intakeRouter.post('/:sessionId/message', optionalAuth, async (req: AuthRequest, 
       return res.status(404).json({ success: false, error: 'Session not found' });
     }
 
-    // Get conversation history
-    const history = session.messages.map(m => ({ role: m.role, content: m.content }));
-    const currentProfile = (session.structuredProfile as UserProfileData) || {};
+    const lang = data.lang || (currentProfile.lang as 'en' | 'hi') || 'en';
 
-    // Process follow-up
-    const result = await processFollowUp(history, data.message, currentProfile);
+    // Process follow-up with language
+    const result = await processFollowUp(history, data.message, currentProfile, lang);
 
     // Merge extracted data
-    const updatedProfile = { ...currentProfile, ...result.extractedData };
+    const updatedProfile = { ...currentProfile, ...result.extractedData, lang };
 
     // Save messages and update profile
     await prisma.$transaction([
@@ -139,7 +149,7 @@ intakeRouter.post('/:sessionId/message', optionalAuth, async (req: AuthRequest, 
           sessionId,
           role: 'assistant',
           content: result.response,
-          metadata: { extractedData: result.extractedData, isComplete: result.isComplete },
+          metadata: { extractedData: result.extractedData, isComplete: result.isComplete, lang },
         },
       }),
       prisma.intakeSession.update({
@@ -151,8 +161,8 @@ intakeRouter.post('/:sessionId/message', optionalAuth, async (req: AuthRequest, 
     // If conversation is complete, generate recommendations
     let recommendations = null;
     if (result.isComplete) {
-      const classification = await classifyAndExtract(session.initialProblem, updatedProfile);
-      recommendations = await getRecommendations(sessionId, session.initialProblem, updatedProfile, classification.categories);
+      const classification = await classifyAndExtract(session.initialProblem, updatedProfile, lang);
+      recommendations = await getRecommendations(sessionId, session.initialProblem, updatedProfile, classification.categories, lang);
 
       await prisma.intakeSession.update({
         where: { id: sessionId },
@@ -171,7 +181,8 @@ intakeRouter.post('/:sessionId/message', optionalAuth, async (req: AuthRequest, 
         session: updatedSession,
         response: result.response,
         isComplete: result.isComplete,
-        recommendations,
+        recommendations: recommendations?.recommendations || null,
+        aiExplanation: recommendations?.aiExplanation || null,
       },
     });
   } catch (error) {
@@ -219,13 +230,15 @@ intakeRouter.post('/:sessionId/recommend', optionalAuth, async (req: AuthRequest
       return res.status(404).json({ success: false, error: 'Session not found' });
     }
 
-    const profile = (session.structuredProfile as UserProfileData) || {};
-    const classification = await classifyAndExtract(session.initialProblem, profile);
+    const profile = (session.structuredProfile as any) || {};
+    const lang = (req.body?.lang as 'en' | 'hi') || (profile?.lang as 'en' | 'hi') || 'en';
+    const classification = await classifyAndExtract(session.initialProblem, profile, lang);
     const recommendations = await getRecommendations(
       session.id,
       session.initialProblem,
       profile,
-      classification.categories
+      classification.categories,
+      lang
     );
 
     return res.json({ success: true, data: recommendations });
@@ -241,7 +254,8 @@ async function getRecommendations(
   sessionId: string,
   problem: string,
   profile: UserProfileData,
-  categories: string[]
+  categories: string[],
+  lang: 'en' | 'hi' = 'en'
 ) {
   // Fetch published records matching categories
   const categoryFilter = categories.length > 0 ? categories : undefined;
@@ -312,7 +326,7 @@ async function getRecommendations(
 
   // Generate AI explanation if available
   let aiExplanation = null;
-  if (isGeminiAvailable() && topResults.length > 0) {
+  if (topResults.length > 0) {
     try {
       aiExplanation = await explainRecommendations(
         problem,
@@ -331,7 +345,8 @@ async function getRecommendations(
           matchReasons: r.matchReasons,
           missingInfo: r.missingInfo,
           relevanceLabel: r.label,
-        }))
+        })),
+        lang
       );
     } catch (error) {
       logger.error('AI explanation failed', error);

@@ -124,7 +124,7 @@ export const recordsApi = {
 
 // ── Intake & AI Assistant API ──
 export const intakeApi = {
-  start: async (problem: string, profile?: Partial<UserProfile>) => {
+  start: async (problem: string, profile?: Partial<UserProfile>, lang: 'en' | 'hi' = 'en') => {
     const res = await api.post<{
       success: boolean;
       data: {
@@ -135,13 +135,14 @@ export const intakeApi = {
           missingFields: string[];
         };
         recommendations: any;
+        aiExplanation: string | null;
         geminiAvailable: boolean;
       };
-    }>('/intake/start', { problem, profile });
+    }>('/intake/start', { problem, profile, lang });
     return res.data;
   },
 
-  sendMessage: async (sessionId: string, message: string) => {
+  sendMessage: async (sessionId: string, message: string, lang: 'en' | 'hi' = 'en') => {
     const res = await api.post<{
       success: boolean;
       data: {
@@ -149,8 +150,9 @@ export const intakeApi = {
         response: string;
         isComplete: boolean;
         recommendations: any;
+        aiExplanation: string | null;
       };
-    }>(`/intake/${sessionId}/message`, { message });
+    }>(`/intake/${sessionId}/message`, { message, lang });
     return res.data;
   },
 
@@ -192,6 +194,26 @@ export const savedApi = {
 
   remove: async (recordId: string) => {
     const res = await api.delete<{ success: boolean; message: string }>(`/saved/records/${recordId}`);
+    return res.data;
+  },
+
+  getPlans: async () => {
+    const res = await api.get<{ success: boolean; data: any[] }>('/saved/plans');
+    return res.data;
+  },
+
+  createPlan: async (data: { title: string; recordId?: string; plan: any; notes?: string }) => {
+    const res = await api.post<{ success: boolean; data: any }>('/saved/plans', data);
+    return res.data;
+  },
+
+  updatePlan: async (planId: string, data: any) => {
+    const res = await api.put<{ success: boolean; data: any }>(`/saved/plans/${planId}`, data);
+    return res.data;
+  },
+
+  deletePlan: async (planId: string) => {
+    const res = await api.delete<{ success: boolean; message: string }>(`/saved/plans/${planId}`);
     return res.data;
   },
 };
@@ -259,6 +281,69 @@ export const adminApi = {
       status,
       adminNotes,
     });
+    return res.data;
+  },
+
+  verifyRecord: async (id: string) => {
+    const res = await api.post<{ success: boolean; data: any }>(`/admin/records/${id}/verify`);
+    return res.data;
+  },
+
+  importRecords: async (records: any[], autoPublish = false) => {
+    const res = await api.post<{
+      success: boolean;
+      data: { total: number; importedCount: number; skippedCount: number; imported: any[]; skipped: any[] };
+    }>('/admin/records/import', { records, autoPublish });
+    return res.data;
+  },
+};
+
+// ── RTI & First Appeal Drafting API ──
+export const rtiApi = {
+  getAuthorities: async () => {
+    const res = await api.get<{
+      success: boolean;
+      data: any[];
+      statutoryNotice: any;
+    }>('/rti/authorities');
+    return res.data;
+  },
+
+  generate: async (data: any) => {
+    const res = await api.post<{
+      success: boolean;
+      data: {
+        type: 'RTI_REQUEST' | 'FIRST_APPEAL';
+        title: string;
+        draftText: string;
+        savedDraftId?: string;
+        statutoryReferences: string[];
+        filingInstructions: string[];
+        attachmentsChecklist: string[];
+        officialPortalUrl: string;
+        disclaimer: string;
+      };
+    }>('/rti/generate', data);
+    return res.data;
+  },
+
+  getDrafts: async () => {
+    const res = await api.get<{ success: boolean; data: any[] }>('/rti/drafts');
+    return res.data;
+  },
+
+  getDraft: async (id: string) => {
+    const res = await api.get<{ success: boolean; data: any }>(`/rti/drafts/${id}`);
+    return res.data;
+  },
+
+  updateDraft: async (id: string, data: { title?: string; notes?: string; draftText?: string; steps?: any[] }) => {
+    const res = await api.put<{ success: boolean; data: any }>(`/rti/drafts/${id}`, data);
+    return res.data;
+  },
+
+  deleteDraft: async (id: string) => {
+    const res = await api.delete<{ success: boolean; message: string }>(`/rti/drafts/${id}`);
     return res.data;
   },
 };

@@ -221,6 +221,113 @@ adminRouter.patch('/records/:id/status', async (req: AuthRequest, res: Response)
   }
 });
 
+// POST /api/admin/records/:id/verify — Mark verified and published
+adminRouter.post('/records/:id/verify', async (req: AuthRequest, res: Response) => {
+  try {
+    const existing = await prisma.governmentRecord.findUnique({ where: { id: req.params.id } });
+    if (!existing) return res.status(404).json({ success: false, error: 'Record not found' });
+
+    const verified = await prisma.governmentRecord.update({
+      where: { id: req.params.id },
+      data: {
+        status: 'PUBLISHED',
+        requiresHumanReview: false,
+        lastVerifiedAt: new Date(),
+      },
+    });
+
+    await prisma.adminAuditLog.create({
+      data: {
+        adminId: req.userId!,
+        action: 'verify_and_publish',
+        entityType: 'GovernmentRecord',
+        entityId: verified.id,
+        details: { fromStatus: existing.status, verifiedAt: new Date().toISOString() },
+      },
+    });
+
+    return res.json({ success: true, data: verified });
+  } catch (error) {
+    logger.error('Verify record error', error);
+    return res.status(500).json({ success: false, error: 'Failed to verify record' });
+  }
+});
+
+// POST /api/admin/records/import — Batch scheme import with deduplication
+adminRouter.post('/records/import', async (req: AuthRequest, res: Response) => {
+  try {
+    const batchSchema = z.object({
+      records: z.array(recordSchema).min(1).max(50),
+      autoPublish: z.boolean().default(false),
+    });
+
+    const { records: items, autoPublish } = batchSchema.parse(req.body);
+
+    const imported = [];
+    const skipped = [];
+
+    for (const item of items) {
+      // Check for existing record by slug or title
+      const existing = await prisma.governmentRecord.findFirst({
+        where: {
+          OR: [
+            { slug: item.slug },
+            { title: { equals: item.title, mode: 'insensitive' } },
+          ],
+        },
+      });
+
+      if (existing) {
+        skipped.push({ title: item.title, slug: item.slug, reason: 'Duplicate scheme found' });
+        continue;
+      }
+
+      const newRecord = await prisma.governmentRecord.create({
+        data: {
+          ...item,
+          officialUrl: item.officialUrl || null,
+          applicationUrl: item.applicationUrl || null,
+          sourceUrl: item.sourceUrl || null,
+          deadlineDate: item.deadlineDate ? new Date(item.deadlineDate) : null,
+          effectiveDate: item.effectiveDate ? new Date(item.effectiveDate) : null,
+          status: autoPublish ? 'PUBLISHED' : 'DRAFT',
+          lastVerifiedAt: autoPublish ? new Date() : null,
+          requiresHumanReview: !autoPublish,
+        },
+      });
+
+      imported.push({ id: newRecord.id, title: newRecord.title, slug: newRecord.slug });
+    }
+
+    await prisma.adminAuditLog.create({
+      data: {
+        adminId: req.userId!,
+        action: 'batch_import_records',
+        entityType: 'GovernmentRecord',
+        entityId: 'BATCH',
+        details: { totalSubmitted: items.length, importedCount: imported.length, skippedCount: skipped.length },
+      },
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        total: items.length,
+        importedCount: imported.length,
+        skippedCount: skipped.length,
+        imported,
+        skipped,
+      },
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ success: false, error: 'Validation failed', details: error.errors });
+    }
+    logger.error('Batch import error', error);
+    return res.status(500).json({ success: false, error: 'Failed to import records' });
+  }
+});
+
 // ── Feedback Management ─────────────────────────────────────────────────
 
 // GET /api/admin/feedback
