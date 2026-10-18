@@ -443,6 +443,12 @@ Name: ${data.applicantName}`;
       savedDraftId = plan.id;
     }
 
+    const feePayable = data.type === 'FIRST_APPEAL'
+      ? 'NIL (Under Central RTI Rules, no fee is charged for First Appeal)'
+      : data.isBpl
+        ? 'NIL (Exempt under Section 7(5) of RTI Act 2005 for BPL Cardholders)'
+        : '₹10 (Statutory application fee under Rule 3 of RTI Rules 2012)';
+
     return res.status(200).json({
       success: true,
       data: {
@@ -450,6 +456,7 @@ Name: ${data.applicantName}`;
         title,
         draftText,
         savedDraftId,
+        feePayable,
         statutoryReferences,
         filingInstructions,
         attachmentsChecklist,

@@ -282,7 +282,7 @@ Signature: ________________________
   }
 
   const statutoryDisclaimer =
-    'DISCLAIMER: This document is a computer-generated prefilled draft intended solely to assist citizens in preparing their application. CARbon Setu is an independent civic information platform and does NOT possess the statutory authority to approve applications or grant benefits. You must review, sign, and submit this application through official government channels (e.g. Common Service Centres or designated departmental web portals).';
+    'DISCLAIMER: This document is an informational, computer-generated prefilled draft intended solely to assist citizens in preparing their application. CARbon Setu is an independent civic information platform and does NOT possess the statutory authority to approve applications or grant benefits. You must review, sign, and submit this application through official government channels (e.g. Common Service Centres or designated departmental web portals).';
 
   return {
     documentId: `APP-${Date.now()}`,

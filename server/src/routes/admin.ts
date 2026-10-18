@@ -584,3 +584,164 @@ adminRouter.post('/ingest', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// ── Official Government PDF Ingestion & OCR Pipeline ─────────────────────────
+
+const ingestPdfSchema = z.object({
+  pdfUrl: z.string().url().optional(),
+  pdfBase64: z.string().optional(),
+  documentId: z.string().optional(),
+  schemeSlug: z.string().min(2),
+  schemeTitle: z.string().min(2),
+  documentTitle: z.string().min(5),
+  issuingAuthority: z.string().min(3),
+  publicationDate: z.string().optional(),
+  verificationStatus: z.enum(['PENDING_REVIEW', 'VERIFIED', 'GOVERNMENT_GAZETTE']).default('PENDING_REVIEW'),
+}).refine(data => data.pdfUrl || data.pdfBase64, {
+  message: 'Either pdfUrl or pdfBase64 must be provided',
+});
+
+// POST /api/admin/ingest-pdf — Ingest official government PDF with SSRF protection & page-aware chunking
+adminRouter.post('/ingest-pdf', async (req: AuthRequest, res: Response) => {
+  try {
+    const data = ingestPdfSchema.parse(req.body);
+    const { ingestGovernmentPdf } = await import('../services/pdfIngestion');
+
+    const result = await ingestGovernmentPdf({
+      pdfUrl: data.pdfUrl,
+      pdfBase64: data.pdfBase64,
+      documentId: data.documentId,
+      schemeSlug: data.schemeSlug,
+      schemeTitle: data.schemeTitle,
+      documentTitle: data.documentTitle,
+      issuingAuthority: data.issuingAuthority,
+      publicationDate: data.publicationDate,
+      verificationStatus: data.verificationStatus,
+    });
+
+    await prisma.adminAuditLog.create({
+      data: {
+        adminId: req.userId!,
+        action: 'ingest_pdf',
+        entityType: 'SchemeDocument',
+        entityId: result.documentId,
+        details: {
+          documentTitle: data.documentTitle,
+          pageCount: result.pageCount,
+          checksum: result.checksum,
+          isScanned: result.isScanned,
+          chunkCount: result.chunkCount,
+        },
+      },
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: result,
+    });
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ success: false, error: 'Validation failed', details: error.errors });
+    }
+    logger.error('PDF ingestion error', error);
+    return res.status(500).json({ success: false, error: error.message || 'Failed to ingest PDF' });
+  }
+});
+
+// GET /api/admin/documents/pending — List all documents currently pending review
+adminRouter.get('/documents/pending', async (_req: AuthRequest, res: Response) => {
+  try {
+    const pendingDocs = await prisma.$queryRawUnsafe<any[]>(`
+      SELECT 
+        d.id, 
+        d."documentId", 
+        d."schemeSlug", 
+        d."schemeTitle", 
+        d."documentTitle", 
+        d."sourceUrl", 
+        d."issuingAuthority", 
+        d."publicationDate", 
+        d."verificationStatus", 
+        d."createdAt",
+        COUNT(c.id)::int AS "chunkCount"
+      FROM "SchemeDocument" d
+      LEFT JOIN "SchemeDocumentChunk" c ON d.id = c."documentId"
+      WHERE d."verificationStatus" = 'PENDING_REVIEW'
+      GROUP BY d.id
+      ORDER BY d."createdAt" DESC;
+    `);
+
+    return res.json({
+      success: true,
+      data: pendingDocs,
+      count: pendingDocs.length,
+    });
+  } catch (error: any) {
+    logger.error('Get pending documents error', error);
+    return res.status(500).json({ success: false, error: 'Failed to retrieve pending documents' });
+  }
+});
+
+// POST /api/admin/documents/:id/verify — Deliberate review workflow: promote document to VERIFIED or GOVERNMENT_GAZETTE
+const verifyDocumentSchema = z.object({
+  status: z.enum(['VERIFIED', 'GOVERNMENT_GAZETTE']),
+});
+
+adminRouter.post('/documents/:id/verify', async (req: AuthRequest, res: Response) => {
+  try {
+    const { status } = verifyDocumentSchema.parse(req.body);
+    const { approveGovernmentDocument } = await import('../services/pdfIngestion');
+
+    const result = await approveGovernmentDocument(req.params.id, status);
+
+    await prisma.adminAuditLog.create({
+      data: {
+        adminId: req.userId!,
+        action: 'verify_document',
+        entityType: 'SchemeDocument',
+        entityId: req.params.id,
+        details: { approvedStatus: status },
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: `Document status successfully updated to ${status}`,
+      data: result,
+    });
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ success: false, error: 'Validation failed', details: error.errors });
+    }
+    logger.error('Verify document error', error);
+    return res.status(500).json({ success: false, error: error.message || 'Failed to verify document' });
+  }
+});
+
+// DELETE /api/admin/documents/:id — Reject and purge a pending document
+adminRouter.delete('/documents/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM "SchemeDocument" WHERE id = $1 OR "documentId" = $1;`,
+      req.params.id
+    );
+
+    await prisma.adminAuditLog.create({
+      data: {
+        adminId: req.userId!,
+        action: 'delete_document',
+        entityType: 'SchemeDocument',
+        entityId: req.params.id,
+        details: { action: 'purged_document' },
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: 'Document and its chunks successfully deleted',
+    });
+  } catch (error: any) {
+    logger.error('Delete document error', error);
+    return res.status(500).json({ success: false, error: 'Failed to delete document' });
+  }
+});
+

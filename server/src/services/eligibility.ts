@@ -22,8 +22,11 @@ export interface EligibilityResult {
   maxScore: number;
   percentage: number;
   label: 'likely_relevant' | 'potentially_relevant' | 'more_info_required' | 'does_not_match';
+  outcomeStatement: string;
+  isEligible: boolean;
   matchReasons: string[];
   missingInfo: string[];
+  missingRequirements: string[];
   failedRules: string[];
 }
 
@@ -47,15 +50,19 @@ function evaluateRule(
 
   const ruleValue = rule.value;
 
+  const op = String(rule.operator || '').toLowerCase();
+
   try {
-    switch (rule.operator) {
+    switch (op) {
       case 'eq':
+      case 'equals':
         if (String(fieldValue).toLowerCase() === ruleValue.toLowerCase()) {
           return { result: 'match', reason: rule.description || `${rule.fieldName} matches` };
         }
         return { result: 'no_match', reason: rule.description || `${rule.fieldName} does not match required value` };
 
       case 'neq':
+      case 'not_equals':
         if (String(fieldValue).toLowerCase() !== ruleValue.toLowerCase()) {
           return { result: 'match', reason: rule.description || `${rule.fieldName} qualifies` };
         }
@@ -79,7 +86,9 @@ function evaluateRule(
         return { result: 'no_match', reason: rule.description || `${rule.fieldName} is excluded` };
       }
 
-      case 'gte': {
+      case 'gte':
+      case 'greater_than':
+      case 'greater_than_or_equal': {
         const numVal = parseNumericValue(fieldValue);
         const ruleNum = parseFloat(ruleValue);
         if (numVal === null) return { result: 'unknown', reason: `Cannot parse ${rule.fieldName} as a number` };
@@ -89,7 +98,9 @@ function evaluateRule(
         return { result: 'no_match', reason: rule.description || `${rule.fieldName} below minimum` };
       }
 
-      case 'lte': {
+      case 'lte':
+      case 'less_than':
+      case 'less_than_or_equal': {
         const numVal = parseNumericValue(fieldValue);
         const ruleNum = parseFloat(ruleValue);
         if (numVal === null) return { result: 'unknown', reason: `Cannot parse ${rule.fieldName} as a number` };
@@ -146,10 +157,13 @@ function parseNumericValue(value: unknown): number | null {
  * Evaluate all eligibility rules for a record against user profile.
  */
 export function evaluateEligibility(
-  record: GovernmentRecord & { eligibilityRules: EligibilityRule[] },
-  profile: UserProfileData
+  record: any,
+  profile: UserProfileData,
+  explicitRules?: any[]
 ): EligibilityResult {
-  const rules = record.eligibilityRules;
+  const rules: any[] = explicitRules || record.eligibilityRules || [];
+  const stateScope: string[] = Array.isArray(record.stateScope) ? record.stateScope : [];
+  const beneficiaries: string[] = Array.isArray(record.beneficiaries) ? record.beneficiaries : [];
   const matchReasons: string[] = [];
   const missingInfo: string[] = [];
   const failedRules: string[] = [];
@@ -159,8 +173,8 @@ export function evaluateEligibility(
   let hasHardFail = false;
 
   // Check geographic scope
-  if (record.stateScope.length > 0 && profile.state) {
-    const stateMatch = record.stateScope.some(
+  if (stateScope.length > 0 && profile.state) {
+    const stateMatch = stateScope.some(
       s => s.toLowerCase() === profile.state!.toLowerCase()
     );
     if (stateMatch) {
@@ -171,7 +185,7 @@ export function evaluateEligibility(
       hasHardFail = true;
     }
     totalWeight += 2;
-  } else if (record.stateScope.length > 0 && !profile.state) {
+  } else if (stateScope.length > 0 && !profile.state) {
     missingInfo.push('State information needed to confirm availability');
     totalWeight += 2;
   } else {
@@ -181,8 +195,8 @@ export function evaluateEligibility(
   }
 
   // Check beneficiary category
-  if (record.beneficiaries.length > 0 && profile.category) {
-    const catMatch = record.beneficiaries.some(
+  if (beneficiaries.length > 0 && profile.category) {
+    const catMatch = beneficiaries.some(
       b => b.toLowerCase().includes(profile.category!.toLowerCase()) ||
         profile.category!.toLowerCase().includes(b.toLowerCase())
     );
@@ -194,14 +208,15 @@ export function evaluateEligibility(
       missingInfo.push('Your category may not be the primary target group');
     }
     totalWeight += 3;
-  } else if (record.beneficiaries.length > 0) {
+  } else if (beneficiaries.length > 0) {
     missingInfo.push('Category information would help assess relevance');
     totalWeight += 3;
   }
 
   // Evaluate structured rules
   for (const rule of rules) {
-    const weight = rule.isRequired ? 3 : 1;
+    const isRequired = rule.isRequired ?? rule.isMandatory ?? true;
+    const weight = isRequired ? 3 : 1;
     totalWeight += weight;
 
     const { result, reason } = evaluateRule(rule, profile);
@@ -212,7 +227,7 @@ export function evaluateEligibility(
         matchScore += weight;
         break;
       case 'no_match':
-        if (rule.isRequired) {
+        if (isRequired) {
           failedRules.push(reason);
           hasHardFail = true;
         } else {
@@ -221,6 +236,10 @@ export function evaluateEligibility(
         break;
       case 'unknown':
         missingInfo.push(reason);
+        if (isRequired) {
+          // If mandatory field is missing, flag missing requirement
+          failedRules.push(rule.fieldName);
+        }
         break;
     }
   }
@@ -230,28 +249,44 @@ export function evaluateEligibility(
 
   const percentage = Math.round((matchScore / totalWeight) * 100);
 
-  // Determine label
+  // Determine label and authoritative outcome
   let label: EligibilityResult['label'];
+  let outcomeStatement: string;
+  let isEligible = false;
+
   if (hasHardFail) {
     label = 'does_not_match';
-  } else if (missingInfo.length > matchReasons.length) {
+    outcomeStatement = 'Likely ineligible because a verified condition is not met';
+    isEligible = false;
+  } else if (missingInfo.length > matchReasons.length || percentage < 40) {
     label = 'more_info_required';
-  } else if (percentage >= 60) {
+    outcomeStatement = 'Insufficient information';
+    isEligible = false;
+  } else if (percentage >= 70) {
     label = 'likely_relevant';
-  } else if (percentage >= 30) {
+    outcomeStatement = 'Likely eligible based on verified conditions';
+    isEligible = true;
+  } else if (percentage >= 40) {
     label = 'potentially_relevant';
+    outcomeStatement = 'Requires official/manual verification';
+    isEligible = false;
   } else {
     label = 'does_not_match';
+    outcomeStatement = 'Likely ineligible because a verified condition is not met';
+    isEligible = false;
   }
 
   return {
-    recordId: record.id,
+    recordId: record.id || 'record_eval',
     score: matchScore,
     maxScore: totalWeight,
     percentage,
     label,
+    outcomeStatement,
+    isEligible,
     matchReasons,
     missingInfo,
+    missingRequirements: Array.from(new Set([...missingInfo, ...failedRules])),
     failedRules,
   };
 }
