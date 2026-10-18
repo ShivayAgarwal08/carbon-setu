@@ -471,5 +471,428 @@ describe('CARbon Setu Full API & Rule Engine Test Suite', () => {
       assert.equal(data.success, true);
     });
   });
+
+  describe('8. Safe Health & Diagnostics API', () => {
+    it('GET /api/health/diagnostics returns complete system diagnostic status without secrets', async () => {
+      const res = await fetch(`${BASE_URL}/api/health/diagnostics`);
+      assert.equal(res.status, 200);
+      const data = await res.json();
+      assert.equal(data.success, true);
+      assert.ok(data.system);
+      assert.equal(data.system.database.status, 'connected');
+      assert.ok(data.system.aiEngine);
+      assert.equal(data.system.ragKnowledgeBase.status, 'active');
+      assert.ok(data.system.ragKnowledgeBase.indexedStatutoryChunks > 0);
+      assert.ok(data.system.multilingualSpeech);
+      assert.ok(data.system.statutoryRtiEngine);
+      assert.ok(data.system.applicationGenerator);
+
+      // Verify no secrets leaked in diagnostic payload
+      const jsonStr = JSON.stringify(data);
+      assert.equal(jsonStr.includes('postgres://'), false, 'Database password must not leak');
+      assert.equal(jsonStr.includes('AIzaSy'), false, 'Gemini API key must not leak');
+    });
+  });
+
+  describe('9. RAG Knowledge Base & Statutory Document Retrieval Engine', () => {
+    const { searchEvidence, getRagStats, ingestGovernmentDocument } = require('../services/rag');
+
+    it('indexes official government documents with provenance & citations', async () => {
+      const stats = getRagStats();
+      assert.equal(stats.isInitialized, true);
+      assert.ok(stats.totalChunks >= 10, 'Expected at least 10 verified statutory chunks');
+      assert.ok(stats.totalDocuments >= 5, 'Expected at least 5 verified official documents');
+    });
+
+    it('retrieves evidence chunks for farmer subsidy query with exact source URLs', async () => {
+      const results = await searchEvidence('6000 financial benefit farmer family installment', { limit: 2 });
+      assert.ok(results.length > 0, 'Expected matching chunks');
+      const top = results[0];
+      assert.ok(top.chunk.provenance.sourceUrl.includes('pmkisan.gov.in'));
+      assert.equal(top.chunk.provenance.schemeSlug, 'pm-kisan-samman-nidhi');
+      assert.ok(top.chunk.content.includes('₹6,000'));
+      assert.ok(top.score > 0);
+    });
+
+    it('retrieves evidence chunks for Ayushman health cover', async () => {
+      const results = await searchEvidence('5 lakh hospital health cashless hospitalization', { limit: 2 });
+      assert.ok(results.length > 0);
+      const top = results[0];
+      assert.ok(top.chunk.provenance.schemeTitle.includes('Ayushman'));
+      assert.ok(top.chunk.content.includes('₹5,00,000'));
+      assert.ok(top.chunk.provenance.sourceUrl.includes('pmjay.gov.in'));
+    });
+
+    it('ingests and chunks a new official gazette document', async () => {
+      const ingestResult = await ingestGovernmentDocument(
+        {
+          documentId: 'DOC-TEST-INGEST-2026',
+          schemeSlug: 'test-scheme-welfare',
+          schemeTitle: 'Test Citizen Welfare Scheme',
+          documentTitle: 'Official Gazette Notification 2026',
+          sourceUrl: 'https://myscheme.gov.in/schemes/test',
+          issuingAuthority: 'Ministry of Social Justice, Govt of India',
+          publicationDate: '2026-03-01',
+          verificationStatus: 'VERIFIED',
+        },
+        'Clause 1: Eligibility criteria requires annual income below ₹2,50,000.\n\nClause 2: Beneficiary receives ₹15,000 direct transfer upon successful application at District Welfare Office.'
+      );
+
+      assert.equal(ingestResult.success, true);
+      assert.ok(ingestResult.chunkCount >= 2);
+    });
+  });
+
+  describe('10. Multilingual Speech & Bhashini Adapter', () => {
+    const { bhashiniService } = require('../services/bhashini');
+
+    it('reports Bhashini adapter status and fallback availability', () => {
+      const status = bhashiniService.getStatus();
+      assert.ok(status.provider.includes('Bhashini'));
+      assert.equal(status.browserSpeechSupported, true);
+      assert.ok(status.supportedLanguages.includes('hi'));
+      assert.ok(status.supportedLanguages.includes('en'));
+    });
+
+    it('translates text preserving government scheme names & currency', async () => {
+      const translation = await bhashiniService.translate(
+        'The benefit for PM-KISAN is ₹6,000 per year for farmer family.',
+        'en',
+        'hi',
+        { mockMode: true }
+      );
+
+      assert.equal(translation.provider, 'mock');
+      assert.ok(translation.translatedText.includes('PM-KISAN'), 'Scheme name must be preserved');
+      assert.ok(translation.translatedText.includes('₹6,000'), 'Currency figure must be preserved');
+    });
+
+    it('transcribes speech audio in mock testing mode', async () => {
+      const stt = await bhashiniService.speechToText('dummyBase64AudioData', 'hi', { mockMode: true });
+      assert.equal(stt.provider, 'mock');
+      assert.ok(stt.transcript.length > 5);
+      assert.equal(stt.language, 'hi');
+    });
+  });
+
+  describe('11. Scheme Application Document Generator API', () => {
+    it('POST /api/applications/generate generates prefilled PM-KISAN application draft with checklist', async () => {
+      const res = await fetch(`${BASE_URL}/api/applications/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          schemeSlug: 'pm-kisan-samman-nidhi',
+          schemeTitle: 'PM-KISAN Samman Nidhi',
+          applicantName: 'Rameshwar Singh',
+          fatherOrSpouseName: 'Late Baldev Singh',
+          dobOrAge: '45 years',
+          gender: 'Male',
+          category: 'OBC',
+          occupation: 'Farmer',
+          address: 'Village Pipra, Post Bhiti',
+          district: 'Gorakhpur',
+          state: 'Uttar Pradesh',
+          pincode: '273001',
+          mobileNumber: '9876543210',
+          hasAadhaarLinkedBank: true,
+          landholdingAcres: 2.5,
+          khasraKhatauniNumber: 'Khatauni No. 412/18',
+          preferredLanguage: 'hi',
+        }),
+      });
+
+      assert.equal(res.status, 200);
+      const data = await res.json();
+      assert.equal(data.success, true);
+      assert.ok(data.data.draftText.includes('PM-KISAN'));
+      assert.ok(data.data.draftText.includes('Rameshwar Singh'));
+      assert.ok(data.data.mandatoryChecklist.length > 0);
+      assert.ok(data.data.submissionInstructions.length > 0);
+      assert.equal(data.data.officialPortalUrl, 'https://pmkisan.gov.in');
+      assert.ok(data.data.statutoryDisclaimer.includes('DISCLAIMER'));
+    });
+
+    it('POST /api/applications/generate identifies missing required fields', async () => {
+      const res = await fetch(`${BASE_URL}/api/applications/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          schemeSlug: 'pm-kisan-samman-nidhi',
+          schemeTitle: 'PM-KISAN Samman Nidhi',
+          applicantName: 'Sita Devi',
+          address: 'Main Road',
+          district: 'Varanasi',
+          state: 'Uttar Pradesh',
+          pincode: '221001',
+          hasAadhaarLinkedBank: false,
+          // Missing landholdingAcres and mobileNumber
+        }),
+      });
+
+      assert.equal(res.status, 200);
+      const data = await res.json();
+      assert.equal(data.success, true);
+      assert.ok(data.data.missingRequiredFields.includes('Cultivable Landholding (Acres / Hectares)'));
+      assert.ok(data.data.missingRequiredFields.includes('Active Mobile Number'));
+    });
+  });
+
+  describe('12. WhatsApp Cloud API Webhook Integration', () => {
+    it('GET /api/whatsapp/status returns public integration status', async () => {
+      const res = await fetch(`${BASE_URL}/api/whatsapp/status`);
+      assert.equal(res.status, 200);
+      const data = await res.json();
+      assert.equal(data.success, true);
+      assert.ok(data.data.provider.includes('Meta WhatsApp Cloud API'));
+    });
+
+    it('GET /api/whatsapp/webhook handles Meta challenge verification when token matches', async () => {
+      process.env.WHATSAPP_VERIFY_TOKEN = 'test_meta_verify_token_123';
+      const challenge = 'random_challenge_string_9988';
+      const res = await fetch(
+        `${BASE_URL}/api/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=test_meta_verify_token_123&hub.challenge=${challenge}`
+      );
+      assert.equal(res.status, 200);
+      const text = await res.text();
+      assert.equal(text, challenge);
+    });
+
+    it('GET /api/whatsapp/webhook rejects invalid verification token with 403', async () => {
+      process.env.WHATSAPP_VERIFY_TOKEN = 'correct_token';
+      const res = await fetch(
+        `${BASE_URL}/api/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=wrong_token&hub.challenge=test`
+      );
+      assert.equal(res.status, 403);
+    });
+
+    it('POST /api/whatsapp/webhook accepts valid incoming Meta message payload', async () => {
+      const mockMetaPayload = {
+        object: 'whatsapp_business_account',
+        entry: [
+          {
+            id: 'WHATSAPP_BUSINESS_ACCOUNT_ID',
+            changes: [
+              {
+                value: {
+                  messaging_product: 'whatsapp',
+                  metadata: { display_phone_number: '15550254483', phone_number_id: '100609346426083' },
+                  messages: [
+                    {
+                      from: '919876543210',
+                      id: `wamid.HBgLM${Date.now()}`,
+                      timestamp: '1700000000',
+                      text: { body: 'मुझे किसान योजना के बारे में जानकारी चाहिए' },
+                      type: 'text',
+                    },
+                  ],
+                },
+                field: 'messages',
+              },
+            ],
+          },
+        ],
+      };
+
+      const res = await fetch(`${BASE_URL}/api/whatsapp/webhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mockMetaPayload),
+      });
+
+      assert.equal(res.status, 200);
+      const text = await res.text();
+      assert.equal(text, 'EVENT_RECEIVED');
+    });
+  });
+
+  describe('13. WhatsApp HMAC Signature Verification Security Suite', () => {
+    const crypto = require('crypto');
+    const { validateWhatsAppSignature } = require('../routes/whatsapp');
+    const secret = 'test_webhook_app_secret_key_889900';
+
+    it('accepts valid HMAC-SHA256 signature calculated over exact raw bytes', () => {
+      const payloadBuf = Buffer.from('{"object":"whatsapp_business_account","entry":[]}', 'utf8');
+      const hmac = crypto.createHmac('sha256', secret).update(payloadBuf).digest('hex');
+      const signatureHeader = `sha256=${hmac}`;
+
+      const isValid = validateWhatsAppSignature(payloadBuf, signatureHeader, secret);
+      assert.equal(isValid, true);
+    });
+
+    it('rejects invalid signature with wrong hash', () => {
+      const payloadBuf = Buffer.from('{"test":"payload"}', 'utf8');
+      const signatureHeader = 'sha256=' + 'a'.repeat(64);
+
+      const isValid = validateWhatsAppSignature(payloadBuf, signatureHeader, secret);
+      assert.equal(isValid, false);
+    });
+
+    it('rejects signature when body is altered after signing', () => {
+      const originalBuf = Buffer.from('{"amount": 1000}', 'utf8');
+      const hmac = crypto.createHmac('sha256', secret).update(originalBuf).digest('hex');
+      const signatureHeader = `sha256=${hmac}`;
+
+      const alteredBuf = Buffer.from('{"amount": 9999}', 'utf8');
+      const isValid = validateWhatsAppSignature(alteredBuf, signatureHeader, secret);
+      assert.equal(isValid, false);
+    });
+
+    it('detects whitespace/key-order differences between raw payload and re-serialized JSON', () => {
+      const rawBuf = Buffer.from('{\n  "name": "Ramesh",\n  "city": "Lucknow"\n}', 'utf8');
+      const hmac = crypto.createHmac('sha256', secret).update(rawBuf).digest('hex');
+      const signatureHeader = `sha256=${hmac}`;
+
+      // Re-serialized minified JSON has different bytes
+      const reserializedBuf = Buffer.from(JSON.stringify({ name: 'Ramesh', city: 'Lucknow' }), 'utf8');
+      const matchesReSerialized = validateWhatsAppSignature(reserializedBuf, signatureHeader, secret);
+      assert.equal(matchesReSerialized, false, 'Must fail on re-serialized bytes without raw buffer');
+
+      const matchesRaw = validateWhatsAppSignature(rawBuf, signatureHeader, secret);
+      assert.equal(matchesRaw, true, 'Must pass on exact raw bytes');
+    });
+
+    it('fails closed when signature header is missing or malformed', () => {
+      const payloadBuf = Buffer.from('{"msg":"hi"}', 'utf8');
+      assert.equal(validateWhatsAppSignature(payloadBuf, undefined, secret), false);
+      assert.equal(validateWhatsAppSignature(payloadBuf, 'invalid_header_format', secret), false);
+      assert.equal(validateWhatsAppSignature(payloadBuf, 'sha256=tooshort', secret), false);
+      assert.equal(validateWhatsAppSignature(undefined, 'sha256=' + 'f'.repeat(64), secret), false);
+    });
+
+    it('fails closed when secret is empty or missing', () => {
+      const payloadBuf = Buffer.from('{"msg":"hi"}', 'utf8');
+      assert.equal(validateWhatsAppSignature(payloadBuf, 'sha256=' + 'f'.repeat(64), ''), false);
+      assert.equal(validateWhatsAppSignature(payloadBuf, 'sha256=' + 'f'.repeat(64), undefined), false);
+    });
+
+    it('ensures unrelated API routes continue to work normally', async () => {
+      const healthRes = await fetch(`${BASE_URL}/api/health`);
+      assert.equal(healthRes.status, 200);
+      const schemesRes = await fetch(`${BASE_URL}/api/records?limit=2`);
+      assert.equal(schemesRes.status, 200);
+    });
+  });
+
+  describe('14. Embedding Model Isolation & Synthetic Fallback Safety Suite', () => {
+    const { EMBEDDING_MODELS, generateEmbedding, searchEvidence, purgeSyntheticVectors } = require('../services/rag');
+
+    it('tags generated fallback vectors as synthetic and isolates model identifier', async () => {
+      const emb = await generateEmbedding('Kisan credit card loan details');
+      assert.ok(Array.isArray(emb.values));
+      assert.equal(emb.values.length, 768);
+      assert.equal(typeof emb.model, 'string');
+      assert.equal(typeof emb.isSynthetic, 'boolean');
+      if (!process.env.GEMINI_API_KEY) {
+        assert.equal(emb.model, EMBEDDING_MODELS.DETERMINISTIC_HASH_768);
+        assert.equal(emb.isSynthetic, true);
+      }
+    });
+
+    it('strictly isolates model namespaces: query for model A never matches chunks in model B', async () => {
+      // Query enforcing a non-existent or disjoint model returns 0 results
+      const results = await searchEvidence('PM-KISAN eligibility', {
+        enforceModel: 'non_existent_disjoint_embedding_model_v99',
+        limit: 5,
+      });
+      assert.equal(results.length, 0, 'Must never match chunks indexed under a different embedding model');
+    });
+
+    it('identifies and purges synthetic vectors without deleting source documents', async () => {
+      const purgeResult = await purgeSyntheticVectors();
+      assert.equal(typeof purgeResult.deletedChunksCount, 'number');
+    });
+  });
+
+  describe('15. Safe Document Re-Ingestion & Transactional Replacement Suite', () => {
+    const { ingestGovernmentDocument, searchEvidence } = require('../services/rag');
+
+    it('first ingestion creates document chunks with metadata and model isolation', async () => {
+      const first = await ingestGovernmentDocument(
+        {
+          documentId: 'DOC-REINGEST-TEST-001',
+          schemeSlug: 'pm-reingest-test',
+          schemeTitle: 'Re-Ingestion Test Scheme',
+          documentTitle: 'Guidelines Version 1.0',
+          sourceUrl: 'https://myscheme.gov.in/test-v1',
+          issuingAuthority: 'Ministry of Test Affairs',
+          publicationDate: '2026-01-01',
+          verificationStatus: 'VERIFIED',
+        },
+        'Clause 1: Initial grant of ₹5,000.\n\nClause 2: Additional allowance of ₹2,500.'
+      );
+
+      assert.equal(first.success, true);
+      assert.ok(first.chunkCount >= 2);
+      assert.equal(first.documentId, 'DOC-REINGEST-TEST-001');
+    });
+
+    it('repeated ingestion replaces chunks atomically without duplicate accumulation', async () => {
+      const second = await ingestGovernmentDocument(
+        {
+          documentId: 'DOC-REINGEST-TEST-001',
+          schemeSlug: 'pm-reingest-test',
+          schemeTitle: 'Re-Ingestion Test Scheme',
+          documentTitle: 'Guidelines Version 2.0 (Updated)',
+          sourceUrl: 'https://myscheme.gov.in/test-v2',
+          issuingAuthority: 'Ministry of Test Affairs',
+          publicationDate: '2026-06-01',
+          verificationStatus: 'VERIFIED',
+        },
+        'Clause 1: Updated single benefit grant of ₹10,000 per annum.'
+      );
+
+      assert.equal(second.success, true);
+      // Chunks were replaced by 1 chunk instead of accumulating 2 + 1 = 3
+      assert.equal(second.chunkCount, 1);
+
+      // Verify retrieval returns the updated version, not stale chunks
+      const results = await searchEvidence('Updated single benefit grant', {
+        schemeSlug: 'pm-reingest-test',
+        limit: 5,
+      });
+      assert.ok(results.length > 0);
+      assert.ok(results[0].chunk.content.includes('₹10,000'));
+      assert.ok(!results.some(r => r.chunk.content.includes('Initial grant of ₹5,000')));
+    });
+  });
+
+  describe('16. Verification-Status Enforcement & Document Ingestion Protection Suite', () => {
+    const { ingestGovernmentDocument, searchEvidence } = require('../services/rag');
+
+    it('excludes PENDING_REVIEW documents by default and includes only when explicitly requested', async () => {
+      await ingestGovernmentDocument(
+        {
+          documentId: 'DOC-PENDING-UNREVIEWED-001',
+          schemeSlug: 'unreviewed-test-scheme',
+          schemeTitle: 'Unreviewed Community Support Scheme',
+          documentTitle: 'Draft Circular 2026',
+          sourceUrl: 'https://myscheme.gov.in/draft-support',
+          issuingAuthority: 'Unverified Third Party Circular',
+          publicationDate: '2026-09-01',
+          verificationStatus: 'PENDING_REVIEW',
+        },
+        'Notice: Unconfirmed provision for 50% fertilizer subsidy for test districts.'
+      );
+
+      // Default search MUST NOT include PENDING_REVIEW documents
+      const defaultSearch = await searchEvidence('fertilizer subsidy for test districts', {
+        schemeSlug: 'unreviewed-test-scheme',
+      });
+      assert.equal(
+        defaultSearch.length,
+        0,
+        'PENDING_REVIEW documents must NEVER be returned as verified evidence by default'
+      );
+
+      // Explicit search with includePendingReview: true returns the pending chunk
+      const pendingSearch = await searchEvidence('fertilizer subsidy for test districts', {
+        schemeSlug: 'unreviewed-test-scheme',
+        includePendingReview: true,
+      });
+      assert.ok(pendingSearch.length > 0, 'Must be retrievable when includePendingReview is explicitly enabled');
+      assert.equal(pendingSearch[0].chunk.provenance.verificationStatus, 'PENDING_REVIEW');
+    });
+  });
 });
+
 

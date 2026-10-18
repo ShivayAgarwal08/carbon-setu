@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { logger } from '../utils/logger';
 import { UserProfileData } from './eligibility';
+import { searchEvidence, EvidenceSearchResult } from './rag';
 
 let genai: GoogleGenAI | null = null;
 
@@ -20,6 +21,18 @@ function getModelName(): string {
 
 export function isGeminiAvailable(): boolean {
   return !!process.env.GEMINI_API_KEY;
+}
+
+export function getGeminiDiagnostics() {
+  const configured = isGeminiAvailable();
+  return {
+    configured,
+    provider: 'Google Gemini',
+    model: getModelName(),
+    sdkVersion: '@google/genai ^2.29.1',
+    fallbackEngine: 'Deterministic Rules & Grounded Template Engine',
+    hasKey: configured,
+  };
 }
 
 interface ClassificationResult {
@@ -143,8 +156,14 @@ export async function explainRecommendations(
 ): Promise<string> {
   const client = getClient();
 
+  // Retrieve verified statutory evidence chunks
+  const evidenceResults = await searchEvidence(
+    `${problem} ${records.map(r => r.title).join(' ')}`,
+    { limit: 4 }
+  );
+
   if (!client || records.length === 0) {
-    return generateFallbackExplanation(records, lang);
+    return generateFallbackExplanation(records, lang, evidenceResults);
   }
 
   try {
@@ -162,6 +181,19 @@ Record ${i + 1}: ${r.title}
 - Relevance: ${r.relevanceLabel}
 `).join('\n');
 
+    const evidenceContext = evidenceResults.length > 0
+      ? `\nVERIFIED GOVERNMENT STATUTORY EVIDENCE (FROM OFFICIAL GAZETTES & GUIDELINES):\n` +
+        evidenceResults.map((e, idx) => `
+[Evidence ${idx + 1}]
+- Scheme: ${e.chunk.provenance.schemeTitle}
+- Document: ${e.chunk.provenance.documentTitle}
+- Clause / Section: ${e.chunk.provenance.sectionTitle || 'Official Section'} (Page ${e.chunk.provenance.pageNumber || 'N/A'})
+- Authority: ${e.chunk.provenance.issuingAuthority}
+- Official URL: ${e.chunk.provenance.sourceUrl}
+- Verified Text: "${e.chunk.content}"
+`).join('\n')
+      : '\n(No specific gazette excerpt matched; rely strictly on verified database record fields above.)';
+
     const langInstruction = lang === 'hi'
       ? `LANGUAGE REQUIREMENT:
 - Write the entire response in clear, respectful, natural Hindi (Devanagari script) so a rural citizen can easily understand.
@@ -176,25 +208,25 @@ ${langInstruction}
 User's problem: "${problem}"
 User's profile: ${JSON.stringify(profile)}
 
-Here are government records that may be relevant (from our verified database):
+Here are government records from our verified database:
 ${recordSummaries}
+${evidenceContext}
 
-Write a helpful, clear explanation in plain language. For each relevant record:
-1. Explain why it might help the user
-2. Summarize the key benefits
-3. List what documents/info they might need
-4. Explain the application process simply
-5. Mention what additional information would help confirm eligibility
-6. Include the official URL for verification
+Write a helpful, evidence-grounded explanation in plain language. For each relevant record:
+1. Explain why it might help the user based on statutory rules
+2. Summarize the key benefits and cash/kind assistance
+3. List mandatory documents/info needed before applying
+4. Explain the application process simply (online portal vs CSC / Tehsil)
+5. Mention what additional information would confirm eligibility
+6. Explicitly cite the verified document title and official source URL
 
 CRITICAL RULES:
 - ONLY discuss the records provided above. Do NOT invent or mention schemes not listed.
-- Do NOT fabricate interest rates, deadlines, phone numbers, or any factual details not present in the records.
-- If information is missing, say "Please verify this detail at the official source."
+- Do NOT fabricate interest rates, deadlines, phone numbers, or any factual details not present in the records or evidence.
+- Explicitly distinguish verified statutory facts from general application guidance.
+- If information or an exclusion is missing, say "Please verify this specific detail at the official source."
 - Clearly state that this is informational guidance, not an official determination.
-- If verification date is old, mention that the user should check for updates.
-- Keep language simple and accessible.
-- Format with clear headings and bullet points.`;
+- Keep language simple and accessible. Format with clear headings and bullet points.`;
 
     const response = await client.models.generateContent({
       model: getModelName(),
@@ -401,7 +433,8 @@ function generateFallbackQuestions(profile: Partial<UserProfileData>, lang: 'en'
 
 function generateFallbackExplanation(
   records: Array<{ title: string; shortDescription: string; officialUrl: string | null; matchReasons: string[] }>,
-  lang: 'en' | 'hi' = 'en'
+  lang: 'en' | 'hi' = 'en',
+  evidenceResults: EvidenceSearchResult[] = []
 ): string {
   if (records.length === 0) {
     return lang === 'hi'
@@ -425,6 +458,18 @@ function generateFallbackExplanation(
       text += '---\n\n';
     }
 
+    if (evidenceResults.length > 0) {
+      text += '### 📜 सत्यापित वैधानिक दस्तावेज एवं आधिकारिक संदर्भ (Verified Statutory Evidence)\n\n';
+      for (const ev of evidenceResults) {
+        text += `- **${ev.chunk.provenance.schemeTitle}** (${ev.chunk.provenance.documentTitle})\n`;
+        text += `  - *संबंधित धारा / खंड:* ${ev.chunk.provenance.sectionTitle || 'मार्गदर्शन'}\n`;
+        text += `  - *प्राधिकरण:* ${ev.chunk.provenance.issuingAuthority}\n`;
+        text += `  - *सत्यापित अंश:* "${ev.chunk.content}"\n`;
+        text += `  - *स्रोत:* [आधिकारिक दस्तावेज लिंक](${ev.chunk.provenance.sourceUrl})\n\n`;
+      }
+      text += '---\n\n';
+    }
+
     text += '*कृपया ऊपर दिए गए आधिकारिक सरकारी स्रोतों पर सभी विवरण और पात्रता की पुष्टि अवश्य करें। कार्बन सेतु एक स्वतंत्र नागरिक मंच है और पात्रता या स्वीकृति की गारंटी नहीं देता।*';
     return text;
   }
@@ -440,6 +485,18 @@ function generateFallbackExplanation(
     }
     if (record.officialUrl) {
       text += `**Official source:** ${record.officialUrl}\n\n`;
+    }
+    text += '---\n\n';
+  }
+
+  if (evidenceResults.length > 0) {
+    text += '### 📜 Verified Statutory Evidence & Official Documents\n\n';
+    for (const ev of evidenceResults) {
+      text += `- **${ev.chunk.provenance.schemeTitle}** (${ev.chunk.provenance.documentTitle})\n`;
+      text += `  - *Clause / Section:* ${ev.chunk.provenance.sectionTitle || 'Operational Guidelines'}\n`;
+      text += `  - *Issuing Authority:* ${ev.chunk.provenance.issuingAuthority}\n`;
+      text += `  - *Verified Statutory Excerpt:* "${ev.chunk.content}"\n`;
+      text += `  - *Source URL:* [Official Document Link](${ev.chunk.provenance.sourceUrl})\n\n`;
     }
     text += '---\n\n';
   }

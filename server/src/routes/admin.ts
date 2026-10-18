@@ -493,3 +493,94 @@ adminRouter.get('/stats', async (_req, res: Response) => {
     return res.status(500).json({ success: false, error: 'Failed to get stats' });
   }
 });
+
+// ── RAG Knowledge Base Management ───────────────────────────────────────
+
+import { getRagStats, VERIFIED_GOVERNMENT_DOCUMENTS, ingestGovernmentDocument } from '../services/rag';
+
+// GET /api/admin/knowledge-base — Get RAG stats and indexed documents
+adminRouter.get('/knowledge-base', async (_req, res: Response) => {
+  try {
+    const stats = getRagStats();
+    return res.json({
+      success: true,
+      data: {
+        stats,
+        verifiedDocuments: VERIFIED_GOVERNMENT_DOCUMENTS.map(doc => ({
+          provenance: doc.provenance,
+          sectionCount: doc.sections.length,
+          sections: doc.sections.map(s => ({
+            sectionTitle: s.sectionTitle,
+            pageNumber: s.pageNumber,
+            keywords: s.keywords,
+          })),
+        })),
+      },
+    });
+  } catch (error) {
+    logger.error('Knowledge base stats error', error);
+    return res.status(500).json({ success: false, error: 'Failed to get knowledge base stats' });
+  }
+});
+
+// Input schema for verified document ingestion.
+// NOTE: Endpoint accepts pre-extracted plain text only. It strictly avoids unsafe remote file fetching / SSRF.
+const ingestDocumentSchema = z.object({
+  documentId: z.string().min(3),
+  schemeSlug: z.string().min(2),
+  schemeTitle: z.string().min(2),
+  documentTitle: z.string().min(5),
+  sourceUrl: z.string().url(),
+  issuingAuthority: z.string().min(3),
+  publicationDate: z.string().optional(),
+  verificationStatus: z.enum(['VERIFIED', 'PENDING_REVIEW', 'GOVERNMENT_GAZETTE']).default('PENDING_REVIEW'),
+  content: z.string().min(50).max(500000), // Max 500kB text to prevent denial of service
+});
+
+// POST /api/admin/ingest — Ingest and chunk new reviewed government document
+// Accepts pre-extracted text only. Re-ingestion atomically replaces prior chunks.
+adminRouter.post('/ingest', async (req: AuthRequest, res: Response) => {
+  try {
+    const data = ingestDocumentSchema.parse(req.body);
+
+    const result = await ingestGovernmentDocument(
+      {
+        documentId: data.documentId,
+        schemeSlug: data.schemeSlug,
+        schemeTitle: data.schemeTitle,
+        documentTitle: data.documentTitle,
+        sourceUrl: data.sourceUrl,
+        issuingAuthority: data.issuingAuthority,
+        publicationDate: data.publicationDate || new Date().toISOString().split('T')[0],
+        verificationStatus: data.verificationStatus,
+      },
+      data.content
+    );
+
+    await prisma.adminAuditLog.create({
+      data: {
+        adminId: req.userId!,
+        action: 'ingest_document',
+        entityType: 'RagKnowledgeBase',
+        entityId: data.documentId,
+        details: {
+          documentTitle: data.documentTitle,
+          chunkCount: result.chunkCount,
+          sourceUrl: data.sourceUrl,
+        },
+      },
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ success: false, error: 'Validation failed', details: error.errors });
+    }
+    logger.error('Ingest document error', error);
+    return res.status(500).json({ success: false, error: 'Failed to ingest document' });
+  }
+});
+

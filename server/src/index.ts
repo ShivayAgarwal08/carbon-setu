@@ -18,6 +18,8 @@ import { adminRouter } from './routes/admin';
 import { departmentsRouter } from './routes/departments';
 import { healthRouter } from './routes/health';
 import { rtiRouter } from './routes/rti';
+import { applicationsRouter } from './routes/applications';
+import { whatsappRouter } from './routes/whatsapp';
 import { logger } from './utils/logger';
 
 const app = express();
@@ -81,8 +83,15 @@ const aiLimiter = rateLimit({
 
 app.use(generalLimiter);
 
-// Body parsing
-app.use(express.json({ limit: '1mb' }));
+// Body parsing — Capture raw request buffer for cryptographic HMAC webhook verification
+app.use(
+  express.json({
+    limit: '1mb',
+    verify: (req: express.Request, _res: express.Response, buf: Buffer) => {
+      req.rawBody = buf;
+    },
+  })
+);
 app.use(express.urlencoded({ extended: true }));
 
 // Logging
@@ -101,6 +110,8 @@ app.use('/api/feedback', feedbackRouter);
 app.use('/api/departments', departmentsRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/rti', rtiRouter);
+app.use('/api/applications', applicationsRouter);
+app.use('/api/whatsapp', whatsappRouter);
 
 // Error handler
 app.use(errorHandler);

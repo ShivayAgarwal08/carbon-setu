@@ -29,6 +29,7 @@ import { recordsApi, savedApi } from '../api/client';
 import { GovernmentRecord } from '../types';
 import { CategoryBadge } from '../components/EligibilityBadge';
 import { FeedbackModal } from '../components/FeedbackModal';
+import { ApplicationDraftModal } from '../components/ApplicationDraftModal';
 import { useAuth } from '../context/AuthContext';
 import { useCompare } from '../context/CompareContext';
 import { useLanguage } from '../context/LanguageContext';
@@ -47,6 +48,7 @@ export const SchemeDetailPage: React.FC = () => {
   const [isSaved, setIsSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
+  const [isDraftModalOpen, setIsDraftModalOpen] = useState(false);
   const [checkedDocs, setCheckedDocs] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -341,6 +343,14 @@ export const SchemeDetailPage: React.FC = () => {
             <span>{creatingPlan ? 'Creating Plan...' : 'Track Action Plan'}</span>
           </button>
 
+          <button
+            onClick={() => setIsDraftModalOpen(true)}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold border border-blue-300 bg-blue-50 text-blue-900 hover:bg-blue-100 transition-all cursor-pointer"
+          >
+            <FileText className="w-4 h-4 text-blue-700" />
+            <span>Prefill Application Draft</span>
+          </button>
+
           {record.officialUrl && (
             <a
               href={record.officialUrl}
@@ -580,6 +590,12 @@ export const SchemeDetailPage: React.FC = () => {
         onClose={() => setIsFeedbackOpen(false)}
         recordId={record.id}
         recordTitle={record.title}
+      />
+
+      <ApplicationDraftModal
+        isOpen={isDraftModalOpen}
+        onClose={() => setIsDraftModalOpen(false)}
+        record={record}
       />
     </div>
   );

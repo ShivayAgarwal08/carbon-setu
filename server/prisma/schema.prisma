@@ -383,3 +383,62 @@ model AdminAuditLog {
   @@index([entityType, entityId])
   @@index([createdAt])
 }
+
+// ─── OFFICIAL SCHEME DOCUMENTS & VECTOR RAG ──────────────────────────
+
+model SchemeDocument {
+  id                 String   @id @default(uuid())
+  documentId         String   @unique // e.g. "DOC-PMKISAN-2024-REV01"
+  schemeSlug         String
+  schemeTitle        String
+  documentTitle      String
+  sourceUrl          String
+  issuingAuthority   String
+  publicationDate    String?
+  verificationStatus String   @default("PENDING_REVIEW") // VERIFIED, PENDING_REVIEW, GOVERNMENT_GAZETTE
+  rawText            String?  @db.Text
+  lastCheckedAt      DateTime @default(now())
+  
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  chunks             SchemeDocumentChunk[]
+
+  @@index([schemeSlug])
+  @@index([verificationStatus])
+}
+
+model SchemeDocumentChunk {
+  id           String         @id @default(uuid())
+  documentId   String
+  document     SchemeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  
+  chunkIndex   Int
+  sectionTitle String?
+  pageNumber   Int?
+  content      String         @db.Text
+  keywords     String[]
+  embeddingModel String       @default("text-embedding-004")
+  embedding    Unsupported("vector(768)")?
+
+  createdAt    DateTime       @default(now())
+
+  @@index([documentId])
+  @@index([embeddingModel])
+}
+
+// ─── PERSISTENT WHATSAPP AUDIT & IDEMPOTENCY ─────────────────────────
+
+model WhatsAppMessageAudit {
+  id           String   @id @default(uuid())
+  messageId    String   @unique
+  senderPhone  String   // masked e.g. 91******10
+  messageType  String   // text, audio
+  processedAt  DateTime @default(now())
+  status       String   @default("PROCESSED")
+  replyText    String?  @db.Text
+
+  @@index([messageId])
+  @@index([processedAt])
+}
+

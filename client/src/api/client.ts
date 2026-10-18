@@ -347,3 +347,47 @@ export const rtiApi = {
     return res.data;
   },
 };
+
+// ── Application Form Generator API ──
+export const applicationsApi = {
+  generate: async (data: any) => {
+    const res = await api.post<{
+      success: boolean;
+      data: {
+        documentId: string;
+        schemeTitle: string;
+        schemeSlug: string;
+        officialPortalUrl: string;
+        submissionAuthority: string;
+        filingMode: string;
+        generatedDate: string;
+        draftText: string;
+        missingRequiredFields: string[];
+        mandatoryChecklist: string[];
+        submissionInstructions: string[];
+        statutoryDisclaimer: string;
+        savedDraftId?: string;
+      };
+    }>('/applications/generate', data);
+    return res.data;
+  },
+
+  getDrafts: async () => {
+    const res = await api.get<{ success: boolean; data: any[] }>('/applications/drafts');
+    return res.data;
+  },
+
+  getDraft: async (id: string) => {
+    const res = await api.get<{ success: boolean; data: any }>(`/applications/drafts/${id}`);
+    return res.data;
+  },
+};
+
+// ── Health Diagnostics API ──
+export const healthApi = {
+  getDiagnostics: async () => {
+    const res = await api.get<{ success: boolean; system: any }>('/health/diagnostics');
+    return res.data;
+  },
+};
+

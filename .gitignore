@@ -27,6 +27,10 @@ postgres_data/
 *.sqlite3
 *.dump
 *.sql.gz
+backups/
+**/backups/
+*.backup
+*.json.bak
 
 # Logs
 logs/
