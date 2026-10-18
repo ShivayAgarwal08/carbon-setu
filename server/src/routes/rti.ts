@@ -191,12 +191,13 @@ rtiRouter.post('/generate', optionalAuth, async (req: AuthRequest, res: Response
       ];
 
       filingInstructions = [
-        'ONLINE FILING: If the authority is a Central Ministry/Department, file directly at https://rtionline.gov.in using credit card, debit card, UPI, or Net Banking.',
-        'OFFLINE FILING: Submit to the Public Information Officer (CPIO/SPIO) in person or by Speed Post/Registered Post.',
+        'CENTRAL AUTHORITIES: If the public authority is under the Union / Central Government (Ministries, Departments, Nationalized Banks, PSUs), file directly at https://rtionline.gov.in or submit ₹10 fee via IPO/DD under Central RTI Rules, 2012.',
+        'STATE AUTHORITIES: If the public authority is under a State Government or Panchayati Raj / Urban Local Body, submit to the SPIO following the respective State RTI Rules (fee payment modes and state online portals like rtionline.karnataka.gov.in, etc. vary by State).',
+        'OFFLINE SUBMISSION: Submit to the Public Information Officer (CPIO/SPIO) in person or by Speed Post/Registered Post.',
         data.isBpl
-          ? 'FEE EXEMPTION: Attach a self-attested photocopy of your BPL/Antyodaya Ration Card to claim full fee exemption.'
-          : 'FEE PAYMENT: Pay ₹10 fee via Indian Postal Order (IPO) or Demand Draft in favor of "Accounts Officer, [Name of Public Authority]", payable at head office.',
-        'REMEDY ON DELAY: If information is not provided within 30 days of receipt, the citizen has the statutory right to file a First Appeal under Section 19(1).',
+          ? 'BPL FEE EXEMPTION: Proviso to Section 7(5) exempts BPL cardholders across India from application and copying fees. Attach self-attested copy of BPL/Antyodaya Ration Card.'
+          : 'FEE PAYMENT: Standard application fee is ₹10 for Central authorities (payable to "Accounts Officer"); verify state-specific fee rules for state public authorities.',
+        'REMEDY ON DELAY: Section 7(1) mandates information within 30 days. If not provided, Section 7(2) deems it a refusal, entitling the citizen to a First Appeal under Section 19(1) and free information under Section 7(6).',
       ];
 
       attachmentsChecklist = [
@@ -306,7 +307,7 @@ Name: ${data.applicantName}`;
       filingInstructions = [
         'TIME LIMIT: A First Appeal must be filed within 30 days from the date on which the decision was received from the CPIO, or within 30 days from the expiry of the statutory period for receiving a reply.',
         'SUBMISSION: Address this appeal directly to the designated First Appellate Authority (FAA), who is an officer senior in rank to the CPIO.',
-        'NO APPEAL FEE: Under Central RTI Rules, no fee is charged for filing a First Appeal before a Central Public Authority.',
+        'NO APPEAL FEE (CENTRAL): Under Central RTI Rules, 2012, no fee is charged for filing a First Appeal before a Central Public Authority. For State authorities, consult specific State RTI Rules regarding court-fee stamps or nominal fees.',
         'ATTACHMENTS: Always enclose a self-attested copy of your original RTI application, postal tracking / receipt, and the CPIO reply letter (if received).',
       ];
 

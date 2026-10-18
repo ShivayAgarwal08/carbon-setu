@@ -119,7 +119,7 @@ app.use(errorHandler);
 // Start server (only when not in test mode)
 const isTestEnv = process.env.NODE_ENV === 'test' || process.argv.some(arg => arg.includes('test'));
 if (!isTestEnv) {
-  app.listen(PORT, () => {
+  app.listen(PORT, async () => {
     logger.info(`CARbon Setu API running on port ${PORT}`);
     logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
     
@@ -128,6 +128,15 @@ if (!isTestEnv) {
     }
     if (!process.env.DATABASE_URL) {
       logger.error('DATABASE_URL not set — database features will fail');
+    }
+
+    // Initialize knowledge base and ensure verified official documents are indexed in pgvector
+    try {
+      const { initializeKnowledgeBase } = await import('./services/rag');
+      await initializeKnowledgeBase();
+      logger.info('Knowledge base initialized and verified official documents indexed in pgvector');
+    } catch (err: any) {
+      logger.warn('Failed to initialize knowledge base on startup:', err.message);
     }
   });
 }

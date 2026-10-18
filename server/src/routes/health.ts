@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../utils/prisma';
 import { getGeminiDiagnostics } from '../services/gemini';
-import { getRagStats } from '../services/rag';
+import { getRagStats, getDatabaseRagStats } from '../services/rag';
 import { bhashiniService } from '../services/bhashini';
 import { isWhatsAppConfigured } from './whatsapp';
 import { VERIFIED_PUBLIC_AUTHORITIES } from './rti';
@@ -42,7 +42,7 @@ healthRouter.get('/diagnostics', async (_req, res) => {
   }
 
   const geminiDiag = getGeminiDiagnostics();
-  const ragStats = getRagStats();
+  const ragStats = await getDatabaseRagStats();
   const bhashiniStatus = bhashiniService.getStatus();
   const whatsappConfigured = isWhatsAppConfigured();
 

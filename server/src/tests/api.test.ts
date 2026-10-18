@@ -1042,6 +1042,14 @@ describe('CARbon Setu Full API & Rule Engine Test Suite', () => {
       // Reset OCR adapter
       setOcrAdapter(new GeminiMultimodalOcrAdapter());
     });
+
+    it('safely rejects malformed PDF buffers without %PDF- header', async () => {
+      const corruptedBuffer = Buffer.from('CORRUPTED_NON_PDF_BINARY_DATA', 'utf8');
+      await assert.rejects(
+        async () => parsePdfBuffer(corruptedBuffer),
+        /Invalid PDF buffer: Missing %PDF- header/
+      );
+    });
   });
 
   describe('19. Authoritative Grounded Eligibility Matching & Uncertainty Handling Suite', () => {
