@@ -963,6 +963,85 @@ describe('CARbon Setu Full API & Rule Engine Test Suite', () => {
       assert.equal(approved.success, true);
       assert.equal(approved.status, 'VERIFIED');
     });
+
+    it('detects scanned PDF fixture and invokes OCR adapter successfully', async () => {
+      const { setOcrAdapter, GeminiMultimodalOcrAdapter } = require('../services/pdfIngestion');
+
+      // Scanned PDF fixture with image stream or empty digital text
+      const scannedPdf = Buffer.from(
+        `%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 10 >>\nstream\nq Q\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000195 00000 n \ntrailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n260\n%%EOF`,
+        'utf8'
+      );
+
+      const parsed = await parsePdfBuffer(scannedPdf);
+      assert.equal(parsed.isScanned, true, 'Scanned PDF must be detected by low character density');
+
+      // Test with custom active OCR adapter
+      const mockOcrAdapter = {
+        name: 'mock-ocr-engine',
+        isAvailable: () => true,
+        extractText: async (buf: Buffer) => ({
+          text: 'Section 4: Scanned Gazette Notification on PM-KISAN Aadhaar mandatory seeding dated 15 January 2026.',
+          pageMap: [{ pageNumber: 1, text: 'Section 4: Scanned Gazette Notification on PM-KISAN Aadhaar mandatory seeding.' }],
+          provider: 'Mock OCR Engine (Tesseract/Gemini Test)',
+        }),
+      };
+
+      setOcrAdapter(mockOcrAdapter);
+
+      const ocrIngestResult = await ingestGovernmentPdf({
+        pdfBase64: scannedPdf.toString('base64'),
+        schemeSlug: 'pm-scanned-ocr-scheme',
+        schemeTitle: 'Scanned Gazette Assistance',
+        documentTitle: 'Official Scanned Gazette 2026',
+        issuingAuthority: 'Ministry of Agriculture',
+      });
+
+      assert.equal(ocrIngestResult.success, true);
+      assert.equal(ocrIngestResult.isScanned, true);
+      assert.equal(ocrIngestResult.ocrApplied, true);
+      assert.equal(ocrIngestResult.ocrStatus, 'completed');
+      assert.ok(ocrIngestResult.detectedHeadings.some((h: string) => h.includes('Section 4')));
+
+      // Reset OCR adapter
+      setOcrAdapter(new GeminiMultimodalOcrAdapter());
+    });
+
+    it('reports OCR failure honestly without silent failure or fake text', async () => {
+      const { setOcrAdapter, GeminiMultimodalOcrAdapter } = require('../services/pdfIngestion');
+
+      const scannedPdf = Buffer.from(
+        `%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \ntrailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n180\n%%EOF`,
+        'utf8'
+      );
+
+      const failingOcrAdapter = {
+        name: 'failing-ocr-engine',
+        isAvailable: () => true,
+        extractText: async (buf: Buffer) => {
+          throw new Error('Image too degraded / illegible for OCR');
+        },
+      };
+
+      setOcrAdapter(failingOcrAdapter);
+
+      const failResult = await ingestGovernmentPdf({
+        pdfBase64: scannedPdf.toString('base64'),
+        schemeSlug: 'pm-fail-ocr-scheme',
+        schemeTitle: 'Failing OCR Scheme',
+        documentTitle: 'Illegible Scanned PDF',
+        issuingAuthority: 'Test Authority',
+      });
+
+      assert.equal(failResult.success, true);
+      assert.equal(failResult.isScanned, true);
+      assert.equal(failResult.ocrApplied, false);
+      assert.equal(failResult.ocrStatus, 'failed');
+      assert.ok(failResult.error?.includes('Image too degraded'));
+
+      // Reset OCR adapter
+      setOcrAdapter(new GeminiMultimodalOcrAdapter());
+    });
   });
 
   describe('19. Authoritative Grounded Eligibility Matching & Uncertainty Handling Suite', () => {
